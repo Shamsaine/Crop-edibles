@@ -1,9 +1,10 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { pool, transaction, type DB } from './db.js';
 import { route, id, required, emailSchema, passwordSchema, hashPassword, HttpError } from './auth.js';
 import { disputes } from './views.js';
+import { merchandisingJSON } from './merchandising.js';
 
 export const adminRouter=Router();
 const directorySchema=z.object({
@@ -86,7 +87,7 @@ const productFrom=`FROM products p JOIN users u ON u.id=p.seller_id LEFT JOIN se
  LEFT JOIN LATERAL (SELECT round(avg(rating),1) rating,count(*) review_count FROM reviews WHERE product_id=p.id) r ON true
  LEFT JOIN LATERAL (SELECT count(*) complaints_count,count(*) FILTER(WHERE d.status='Open') open_complaints_count FROM disputes d JOIN order_items i ON i.id=d.order_item_id WHERE i.product_id=p.id) c ON true`;
 const productSelect=`SELECT p.*,u.name seller_name,u.status seller_status,a.business_name,a.location seller_location,a.status application_status,COALESCE(r.rating,0) rating,r.review_count,c.complaints_count,c.open_complaints_count`;
-function productJSON(row:any){return {id:row.id,sellerId:row.seller_id,name:row.name,description:row.description,category:row.category,origin:row.origin,priceMinor:Number(row.price_minor),stock:row.stock,image:row.image,unit:row.unit,tags:row.tags,active:row.active,adminDelisted:row.admin_delisted,flagged:row.flagged,moderationReason:row.moderation_reason,createdAt:row.created_at,updatedAt:row.updated_at,vendorName:row.business_name||row.seller_name,sellerLocation:row.seller_location||'',sellerStatus:row.seller_status,rating:Number(row.rating),reviewsCount:Number(row.review_count),complaintsCount:Number(row.complaints_count),openComplaintsCount:Number(row.open_complaints_count),visible:row.active&&!row.admin_delisted&&row.seller_status==='active'&&row.application_status==='Approved'};}
+function productJSON(row:any){return {id:row.id,sellerId:row.seller_id,name:row.name,description:row.description,category:row.category,origin:row.origin,priceMinor:Number(row.price_minor),stock:row.stock,image:row.image,unit:row.unit,tags:row.tags,active:row.active,adminDelisted:row.admin_delisted,flagged:row.flagged,moderationReason:row.moderation_reason,createdAt:row.created_at,updatedAt:row.updated_at,vendorName:row.business_name||row.seller_name,sellerLocation:row.seller_location||'',sellerStatus:row.seller_status,rating:Number(row.rating),reviewsCount:Number(row.review_count),complaintsCount:Number(row.complaints_count),openComplaintsCount:Number(row.open_complaints_count),...merchandisingJSON(row),visible:row.active&&!row.admin_delisted&&row.seller_status==='active'&&row.application_status==='Approved'};}
 adminRouter.get('/products',route(async(req,res)=>{
  const q=productFilters.parse(req.query);const clauses:string[]=['true'];const params:unknown[]=[];
  if(q.search)add(clauses,params,'(p.name ILIKE ? OR p.description ILIKE ? OR a.business_name ILIKE ?)',`%${q.search}%`);
@@ -140,4 +141,18 @@ adminRouter.get('/overview',route(async(_req,res)=>{
  const trend=await pool.query("SELECT day::date::text date,COALESCE(count(o.id),0)::int orders,COALESCE(sum(o.total_minor) FILTER(WHERE o.payment_status='Paid'),0)::float8 paid FROM generate_series(current_date-6,current_date,interval '1 day') day LEFT JOIN orders o ON o.created_at>=day AND o.created_at<day+interval '1 day' GROUP BY day ORDER BY day");
  const events=await pool.query('SELECT e.id,e.action,e.reason,e.target_type "targetType",e.created_at "createdAt",u.name "actorName" FROM moderation_events e JOIN users u ON u.id=e.actor_id ORDER BY e.created_at DESC LIMIT 8');
  res.json({metrics:Object.fromEntries(Object.entries(rows[0]).map(([key,value])=>[key,Number(value)])),trend:trend.rows,activity:events.rows});
+}));
+
+
+adminRouter.patch('/products/:id/merchandising',route(async(req,res)=>{
+ const productId=id(req.params.id);
+ const body=z.object({featured:z.boolean(),sale:z.object({kind:z.enum(['promo','flash']),priceMinor:z.number().int().positive().max(100000000),startsAt:z.string().datetime(),endsAt:z.string().datetime()}).strict().nullable()}).strict().parse(req.body);
+ if(body.sale&&new Date(body.sale.endsAt)<=new Date(body.sale.startsAt))throw new HttpError(400,'The sale must end after it starts.');
+ await adminTransaction(req.user!.id,async db=>{
+  const found=await db.query('SELECT price_minor FROM products WHERE id=$1 FOR UPDATE',[productId]);
+  if(!found.rowCount)throw new HttpError(404,'Product not found.');
+  if(body.sale&&body.sale.priceMinor>=Number(found.rows[0].price_minor))throw new HttpError(400,'The sale price must be lower than the regular price.');
+  await db.query('UPDATE products SET featured=$2,sale_kind=$3,sale_price_minor=$4,sale_starts_at=$5,sale_ends_at=$6,updated_at=now() WHERE id=$1',[productId,body.featured,body.sale?.kind??null,body.sale?.priceMinor??null,body.sale?.startsAt??null,body.sale?.endsAt??null]);
+  await audit(db,req.user!.id,'product',productId,'merchandising_updated',`Featured: ${body.featured?'yes':'no'}. ${body.sale?`${body.sale.kind} price ${body.sale.priceMinor} kobo, ${body.sale.startsAt} to ${body.sale.endsAt}.`:'No scheduled promotion.'}`);
+ });res.json({ok:true});
 }));

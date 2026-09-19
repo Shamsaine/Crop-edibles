@@ -83,3 +83,15 @@ Open http://localhost:3000/#admin and sign in with your administrator account.
 Google sign-in reads GOOGLE_CLIENT_ID from the root .env when the API starts. Restart the API after changing it. Test at http://localhost:3000/#auth, and add http://localhost and http://localhost:3000 to the Web client's Authorized JavaScript origins in Google Cloud. Google sign-in cannot use the private-IP HTTP development URL; deploy with HTTPS for non-localhost access. See [Google's setup instructions](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
 
 Success notifications disappear after four seconds. Notifications also have a dismiss button, and action feedback clears when navigating between pages.
+
+## Home page and pantry
+
+The home page (`/#catalog`, also the default page) keeps the original banner and shows Featured products, Promos & flash sales, and Best sellers. Explore the pantry opens `/#pantry`. Each See more link opens the same pantry with its collection and sort order in the URL, so links can be shared and browser Back/Forward restores filters.
+
+Pantry filters include collection, category, text search, NGN price range, origin/vendor location, minimum rating and availability. Sort by newest, best selling, price ascending/descending, highest rated or biggest percentage discount. Results are paginated.
+
+In Administration → Products → Inspect → Home page & promotions, an admin can feature a product and schedule either a promo or a flash sale with a sale price and start/end times. Dates are entered in the administrator's local time. Only currently active offers appear in the deals collections. No products are featured or discounted automatically. Empty sections stay honest until real products qualify.
+
+Best sellers use units from delivered, paid orders, ranked across all time. Pending and cancelled purchases do not contribute. Featured/promotional products must still satisfy normal account, approval and listing visibility rules.
+
+Sale prices apply consistently to product cards, details, baskets and new checkout. If a price changes or an offer expires while a buyer is checking out, the basket refreshes and asks them to review the new total before placing the order. Existing orders retain their original price snapshots.
