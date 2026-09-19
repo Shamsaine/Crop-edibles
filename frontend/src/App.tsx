@@ -1,0 +1,75 @@
+﻿import { useCallback, useEffect, useRef, useState } from 'react';
+import { Leaf, ShoppingBag, RefreshCw } from 'lucide-react';
+import { api, mutate, useAction, useResource } from './api';
+import type { Cart as CartData, Order, Product, User } from './types';
+import AuthScreen from './components/AuthScreen';
+import Catalog, { ProductDetail, ProductGrid } from './components/Catalog';
+import Account from './components/Account';
+import Cart from './components/Cart';
+import Orders from './components/Orders';
+import Disputes from './components/Disputes';
+import SellerDashboard from './components/SellerDashboard';
+import AdminDashboard from './components/AdminDashboard';
+import { Feedback, Loading, SectionTitle } from './components/UI';
+
+function PaymentReturn({ reference, onChange, onDone }: { reference: string; onChange: () => void; onDone: () => void }) {
+  const action = useAction(onChange);
+  const started = useRef(false);
+  const [status, setStatus] = useState('');
+  const verify = () => void action.run(async () => {
+    const result = await mutate<{ order: Order }>('/payments/verify', 'POST', { reference });
+    setStatus(result.order.paymentStatus);
+    if (result.order.paymentStatus === 'Paid') { onDone(); window.location.hash = 'orders'; }
+  }, 'Payment status refreshed.');
+  useEffect(() => { if (!started.current) { started.current = true; verify(); } }, []);
+  return <section className="panel payment-return"><h2>Checking your payment</h2><Feedback error={action.error} success={action.success} /><p>{action.busy ? 'Confirming your transaction with Paystack…' : status ? 'Payment status: ' + status + '. View your orders for the latest details.' : 'Your payment has not been confirmed yet. You can safely retry verification.'}</p><div className="action-row"><button className="button primary" disabled={action.busy} onClick={verify}>Check payment again</button><button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders</button></div></section>;
+}
+
+export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionError, setSessionError] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [sessionRevision, setSessionRevision] = useState(0);
+  const [page, setPage] = useState(window.location.hash.slice(1) || 'catalog');
+  const [returnPage, setReturnPage] = useState('catalog');
+  const [paymentReference, setPaymentReference] = useState(new URL(window.location.href).searchParams.get('paymentReference') || '');
+  const refresh = useCallback(() => { setRevision(value => value + 1); setSessionRevision(value => value + 1); }, []);
+  const action = useAction(refresh);
+  const cart = useResource<CartData>(user ? '/cart' : null, revision);
+  const wishlist = useResource<{ products: Product[]; productIds: string[] }>(user ? '/wishlist' : null, revision);
+  useEffect(() => {
+    const update = () => { setPage(window.location.hash.slice(1) || 'catalog'); window.scrollTo({ top: 0 }); };
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
+  useEffect(() => {
+    let live = true;
+    api<{ user: User | null }>('/auth/me').then(result => { if (live) { setUser(result.user); setSessionError(''); } }).catch((error: Error) => { if (live) setSessionError(error.message); }).finally(() => { if (live) setSessionLoading(false); });
+    return () => { live = false; };
+  }, [sessionRevision]);
+  const signIn = () => { setReturnPage(page === 'auth' ? 'catalog' : page); window.location.hash = 'auth'; };
+  const add = (product: Product, quantity = 1) => {
+    if (!user) { signIn(); return; }
+    if (!cart.data) { action.setError('Your basket could not be loaded. Refresh before adding an item.'); return; }
+    const current = cart.data.items.find(item => item.product.id === product.id)?.quantity || 0;
+    void action.run(() => mutate('/cart/' + product.id, 'PUT', { quantity: current + quantity }), 'Added to your basket.');
+  };
+  const save = (product: Product) => {
+    if (!user) { signIn(); return; }
+    if (!wishlist.data) { action.setError('Your saved products could not be loaded. Refresh before making changes.'); return; }
+    void action.run(() => mutate('/wishlist/' + product.id, 'PUT', { saved: !wishlist.data?.productIds.includes(product.id) }), wishlist.data?.productIds.includes(product.id) ? 'Removed from saved products.' : 'Product saved.');
+  };
+  const logout = () => void action.run(async () => { await mutate('/auth/logout', 'POST'); setUser(null); window.location.hash = 'catalog'; }, 'Signed out.');
+  const finishPayment = () => {
+    const url = new URL(window.location.href);
+    ['paymentReference', 'reference', 'trxref'].forEach(key => url.searchParams.delete(key));
+    window.history.replaceState({}, '', url);
+    setPaymentReference('');
+  };
+  const shopping = { onAdd: add, onSave: save, savedIds: wishlist.data?.productIds || [], busy: action.busy || Boolean(user && (cart.loading || wishlist.loading || !cart.data || !wishlist.data)) };
+  const authenticatedPage = ['account','basket','orders','saved','seller','admin','support'].includes(page);
+  return <div className="site-shell"><div className="top-strip">Good food. Independent businesses. A pantry with a story.</div><header className="site-header"><a className="brand" href="#catalog"><span className="brand-icon"><Leaf aria-hidden="true" size={26} /></span><span>Edible Shop<small>FROM HARVEST TO HOME</small></span></a><nav className="main-nav" aria-label="Main navigation"><a href="#catalog" aria-current={page === 'catalog' ? 'page' : undefined}>Marketplace</a>{user && <><a href="#orders" aria-current={page === 'orders' ? 'page' : undefined}>Orders</a><a href="#saved" aria-current={page === 'saved' ? 'page' : undefined}>Saved</a><a href="#support" aria-current={page === 'support' ? 'page' : undefined}>Support</a>{user.accountType === 'seller' && user.role === 'buyer' && <a href="#account">Seller setup</a>}{user.role === 'seller' && <a href="#seller" aria-current={page === 'seller' ? 'page' : undefined}>My store</a>}{user.role === 'admin' && <a href="#admin" aria-current={page === 'admin' ? 'page' : undefined}>Administration</a>}</>}</nav><div className="header-actions">{user ? <><a href="#basket" className="basket-link"><ShoppingBag size={19} aria-hidden="true" />Basket ({cart.data?.items.reduce((sum,item) => sum + item.quantity, 0) || 0})</a><a className="text-button account-link" href="#account" title={user.email}>{user.name.split(' ')[0]}</a><button className="text-button" disabled={action.busy} onClick={logout}>Sign out</button></> : <button className="button primary" onClick={signIn}>Sign in</button>}</div></header><main className="main-content"><div className="refresh-row"><button className="text-button" onClick={refresh} aria-label="Refresh account and marketplace"><RefreshCw size={14} />Refresh</button></div><Feedback error={sessionError || action.error || cart.error || wishlist.error} success={action.success} />{sessionLoading ? <Loading /> : sessionError && !user ? <div className="panel"><h1>We could not connect to the shop.</h1><p>Please make sure the backend and database are running, then retry.</p><button className="button primary" onClick={refresh}>Retry connection</button></div> : <>{paymentReference && (user ? <PaymentReturn reference={paymentReference} onChange={refresh} onDone={finishPayment} /> : <p className="notice">Sign in to the account you used at checkout to verify your payment.</p>)}{page === 'auth' || (authenticatedPage && !user) ? <AuthScreen onSuccess={signedIn => { setUser(signedIn); refresh(); window.location.hash = signedIn.role === 'admin' ? 'admin' : signedIn.role === 'seller' ? 'seller' : signedIn.accountType === 'seller' || (!signedIn.hasPassword && !signedIn.phone) ? 'account' : returnPage === 'auth' ? 'catalog' : returnPage; }} /> : page.startsWith('product/') ? <ProductDetail key={page} id={page.slice('product/'.length)} revision={revision} {...shopping} /> : page === 'account' && user ? <Account user={user} revision={revision} onChange={refresh} /> : page === 'basket' && user ? <Cart cart={cart.data} error={cart.error} loading={cart.loading} revision={revision} onChange={refresh} /> : page === 'orders' && user ? <Orders revision={revision} onChange={refresh} /> : page === 'support' && user ? <Disputes revision={revision} onChange={refresh} admin={user.role === 'admin'} /> : page === 'saved' && user ? <><SectionTitle title="Saved for later" eyebrow="YOUR PANTRY WISHLIST" /><Feedback error={wishlist.error} />{wishlist.loading ? <Loading /> : <ProductGrid products={wishlist.data?.products || []} {...shopping} />}</> : page === 'seller' && user?.role === 'seller' ? <SellerDashboard revision={revision} onChange={refresh} /> : page === 'admin' && user?.role === 'admin' ? <AdminDashboard revision={revision} onChange={refresh} /> : (page === 'seller' || page === 'admin') ? <div className="panel"><h1>Access unavailable</h1><p>Your account does not have access to this area.</p><a className="text-button" href="#account">Go to your account</a></div> : <Catalog revision={revision} {...shopping} />}</>}</main><footer className="site-footer"><a href="#catalog" className="brand"><Leaf size={24} />Edible Shop</a><p>Pantry essentials, connected to the people who make them.</p><span>© {new Date().getFullYear()} Edible Shop</span></footer></div>;
+}
+
+
