@@ -26,7 +26,7 @@ export async function createSession(userId:string,res:Response,db:DB=pool) {
 export function clearSession(res:Response) { res.clearCookie('edible_session',{httpOnly:true,sameSite:'lax',secure:config.secureCookie,path:'/'}); }
 export const sessionMiddleware:RequestHandler=(req,res,next)=>{ Promise.resolve((async()=>{
   const token=cookieToken(req);
-  if(token && /^[a-f0-9]{64}$/.test(token)) { const {rows}=await pool.query('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',[tokenHash(token)]); if(rows[0]) req.user=userJSON(rows[0]); }
+  if(token && /^[a-f0-9]{64}$/.test(token)) { const {rows}=await pool.query('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.status=\'active\'',[tokenHash(token)]); if(rows[0]) req.user=userJSON(rows[0]); }
 })()).then(()=>next(),next); };
 export const requireUser:RequestHandler=(req,_res,next)=> req.user ? next() : next(new HttpError(401,'Please sign in to continue.'));
 export function role(...roles:User['role'][]):RequestHandler { return (req,_res,next)=> !req.user ? next(new HttpError(401,'Please sign in to continue.')) : roles.includes(req.user.role) ? next() : next(new HttpError(403,'You do not have access to this action.')); }

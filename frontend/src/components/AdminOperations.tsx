@@ -1,0 +1,25 @@
+﻿import type { FormEvent } from 'react';
+import { date, money, mutate, useAction, useResource } from '../api';
+import type { VendorApplication } from '../types';
+import { Empty, Feedback, Loading, SectionTitle } from './UI';
+
+
+
+interface Payment { id: string; orderId: string; reference: string; amountMinor: number; status: string; lastError: string | null; createdAt: string }
+export function Application({ application, onChange }: { application: VendorApplication; onChange: () => void }) {
+  const action = useAction(onChange);
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    if (!(submitter instanceof HTMLButtonElement) || !['Approved', 'Rejected'].includes(submitter.value)) { action.setError('Choose Approve seller or Reject application.'); return; }
+    void action.run(() => mutate('/admin/applications/' + application.id, 'PATCH', { status: submitter.value, adminNotes: form.get('adminNotes') }), 'Application reviewed.');
+  };
+  return <article className="panel"><div className="order-heading"><div><p className="eyebrow">{application.category}</p><h2>{application.businessName}</h2></div><span className="badge">{application.status}</span></div><dl className="details-grid"><div><dt>Legal entity</dt><dd>{application.legalEntityName}</dd></div><div><dt>Registration number</dt><dd>{application.registrationNumber}</dd></div><div><dt>Location</dt><dd>{application.location}</dd></div><div><dt>Contact</dt><dd>{application.contactPerson?.name}<br />{application.contactPerson?.email}<br />{application.phone || application.contactPerson?.phone}</dd></div></dl>{application.description && <p className="preserve-lines">{application.description}</p>}<Feedback error={action.error} success={action.success} />{application.status === 'Pending' ? <form className="form-stack" onSubmit={submit}><label>Review notes<textarea name="adminNotes" rows={3} maxLength={2000} /></label><div className="action-row"><button className="button primary" value="Approved" disabled={action.busy}>Approve seller</button><button className="button secondary danger" value="Rejected" disabled={action.busy}>Reject application</button></div></form> : application.adminNotes && <p className="notice">{application.adminNotes}</p>}</article>;
+}
+export function Payments({ revision, onChange }: { revision: number; onChange: () => void }) {
+  const resource = useResource<{ payments: Payment[] }>('/admin/payments', revision);
+  const action = useAction(onChange);
+  return <><SectionTitle title="Online payments" eyebrow="PAYSTACK" /><p className="muted">Verify pending transactions with the provider. Cases marked Needs Review require manual follow-up; closing a support case does not issue a refund.</p><Feedback error={resource.error || action.error} success={action.success} />{resource.loading ? <Loading /> : !resource.data?.payments.length ? <Empty>No online payment attempts yet.</Empty> : resource.data.payments.map(payment => <article className="panel" key={payment.id}><div className="order-heading"><div><h3>Order {payment.orderId.slice(0,8).toUpperCase()}</h3><p className="muted small">{date(payment.createdAt)}</p></div><span className="badge">{payment.status}</span><strong>{money(payment.amountMinor)}</strong></div><p className="small break-word">Reference: {payment.reference}</p>{payment.lastError && <p className="notice">{payment.lastError}</p>}<button className="button secondary" disabled={action.busy} onClick={() => void action.run(() => mutate('/admin/payments/' + encodeURIComponent(payment.reference) + '/verify', 'POST'), 'Provider status checked.')}>Verify with Paystack</button></article>)}</>;
+}
+
+

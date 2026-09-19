@@ -8,7 +8,7 @@ export const config = {
   appUrl: (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
   secureCookie: process.env.NODE_ENV === 'production' || process.env.SESSION_COOKIE_SECURE === 'true',
   paystackKey: process.env.PAYSTACK_SECRET_KEY || '',
-  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
 };
 const schema = process.env.DB_SCHEMA || 'public';
 if (!/^[a-z][a-z0-9_]*$/.test(schema)) throw new Error('Invalid DB_SCHEMA');

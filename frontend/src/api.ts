@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
@@ -40,16 +40,22 @@ export function useAction(onSuccess?: () => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const running = useRef(false);
+  useEffect(() => {
+    if (!success) return;
+    const timer = window.setTimeout(() => setSuccess(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [success]);
+  useEffect(() => { const clear = () => { setSuccess(''); setError(''); }; window.addEventListener('hashchange', clear); return () => window.removeEventListener('hashchange', clear); }, []);
   const run = async (work: () => Promise<unknown>, message = 'Saved.') => {
-    if (busy) return false;
+    if (running.current) return false;
+    running.current = true;
     setBusy(true); setError(''); setSuccess('');
     try { await work(); setSuccess(message); onSuccess?.(); return true; }
     catch (error) { setError(error instanceof Error ? error.message : 'Unable to complete this request.'); return false; }
-    finally { setBusy(false); }
+    finally { running.current = false; setBusy(false); }
   };
   return { busy, error, success, run, setError };
 }
 export const money = (minor: number) => new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 2 }).format(minor / 100);
 export const date = (value: string) => new Date(value).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' });
-
-

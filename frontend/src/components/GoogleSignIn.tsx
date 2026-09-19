@@ -33,6 +33,6 @@ export default function GoogleSignIn({onCredential,busy=false}:{onCredential:(cr
   return()=>{live=false;};
  },[clientId,supported]);
  return <div className="google-sign-in"><div ref={host} inert={busy} aria-busy={busy} />{!ready&&<button className="button secondary" type="button" disabled>Continue with Google</button>}
- {config.loading?<small className="muted">Loading sign-in options?</small>:config.error?<small role="alert">{config.error}</small>:!clientId?<small className="muted">Google sign-in is not available yet. You can register or sign in with email.</small>:!supported?<small className="muted">Google sign-in requires HTTPS or localhost. On the development computer, open <a className="text-button" href="http://localhost:3000/#auth">localhost:3000</a>.</small>:null}
+ {config.loading?<small className="muted">Loading sign-in options…</small>:config.error?<small role="alert">{config.error}</small>:!clientId?<small className="muted">Google sign-in is not available yet. You can register or sign in with email.</small>:!supported?<small className="muted">Google sign-in requires HTTPS or localhost. On the development computer, open <a className="text-button" href="http://localhost:3000/#auth">localhost:3000</a>.</small>:null}
  {error&&<small role="alert">{error}</small>}</div>;
 }
