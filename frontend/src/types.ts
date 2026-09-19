@@ -29,9 +29,14 @@ export interface VendorApplication {
   contactPerson?: { name: string; email: string; phone: string }; createdAt?: string;
 }
 export interface Review { id: string; rating: number; comment: string; name: string; createdAt: string }
-export interface Dispute {
-  id: string; orderId: string; orderItemId: string; productName: string; vendorName: string; customerName: string;
-  reason: string; status: 'Open' | 'Resolved'; resolution: string | null; createdAt: string;
-  messages: { id: string; sender: string; senderName: string; message: string; createdAt: string }[];
+export type TicketStatus = 'Open' | 'Closed' | 'Resolved';
+export interface SupportTicket {
+ id:string;ticketNumber:string;subject:string;category:string;priority:'Low'|'Normal'|'High';
+ openedBy:string;openedByName:string;openedByRole:string;customerName:string;orderId:string|null;orderItemId:string|null;
+ productName:string;vendorName:string;reason:string;status:TicketStatus;resolution:string|null;
+ createdAt:string;updatedAt:string;closedAt:string|null;resolvedAt:string|null;messageCount:number;
+ messages:{id:string;senderId:string;sender:string;senderName:string;senderRole:string;message:string;createdAt:string}[];
+ events:{id:string;actorId:string|null;actorName:string;actorRole:string|null;action:string;note:string;createdAt:string}[];
 }
+export type Dispute = SupportTicket;
 export interface ShopConfig { googleClientId: string; currency: string; deliveryFeeMinor: number; payments: { cod: boolean; paystack: boolean } }

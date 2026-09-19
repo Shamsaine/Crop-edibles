@@ -95,3 +95,15 @@ In Administration → Products → Inspect → Home page & promotions, an admin 
 Best sellers use units from delivered, paid orders, ranked across all time. Pending and cancelled purchases do not contribute. Featured/promotional products must still satisfy normal account, approval and listing visibility rules.
 
 Sale prices apply consistently to product cards, details, baskets and new checkout. If a price changes or an offer expires while a buyer is checking out, the basket refreshes and asks them to review the new total before placing the order. Existing orders retain their original price snapshots.
+
+## Support tickets
+
+Administrators open **Administration → Support**. Orders, Saved and Support are no longer duplicated in their top navigation. Buyers and sellers retain their normal navigation; sellers can also use **My store → Support**.
+
+- **Open ticket** creates a general enquiry or optionally links an order item. Tickets have references such as `TKT-001001`. Buyers, sellers and admins can all create tickets while signed in. Orders → Get help also creates an order ticket and opens its detail page.
+- The list shows subject, opener, priority, status, reply count and last update. Filter by reference/subject/person/product/order, status, category, priority, own tickets, general/order type, date range and (for admins) opener role. Sort and paginate results. Filter settings and ticket detail links are stored in the URL.
+- Open a ticket to see its full conversation and status history. General tickets are visible to their creator and admins. Order tickets are also visible to the related buyer and seller, who can reply while the ticket is open.
+- Only the person who opened a ticket can close it as a regular user. Being the related buyer or seller is not enough. Admins can close, resolve or reopen any ticket. A reason is required for closure/reopening; resolving requires a written outcome.
+- Closed and Resolved tickets remain readable but accept no replies until an admin reopens them. Reopening preserves every earlier comment and resolution. Users can open a new ticket if further help is needed.
+
+Existing support cases were migrated in place: their IDs, messages, order links and resolutions are retained, with ticket references and history added. Recording a resolution does not issue a refund.

@@ -148,3 +148,23 @@ Migration 006 adds featured placement and one scheduled promo/flash sale per pro
 Public priceMinor is the effective current price; basePriceMinor is the regular price. Responses include featured, saleKind, salePriceMinor, saleStartsAt, saleEndsAt, onSale and unitsSold. One shared SQL expression evaluates the sale window with database time in catalogue filtering/sorting, product detail, wishlist, basket and checkout. Promotions begin inclusively and end exclusively. Hidden/suspended/delisted products never appear in storefront collections.
 
 Checkout optionally accepts expectedSubtotalMinor. The frontend supplies its displayed subtotal; a changed price returns 409 before creating an order or reserving stock. The buyer reviews refreshed prices before retrying. Existing idempotent orders and their price snapshots are preserved.
+
+## Support ticket API
+
+Migration 007 extends the existing disputes tables in place. Every ticket has an immutable UUID, a unique sequential `TKT-xxxxxx` display reference and an explicit opened_by user. General tickets have no order link. The original order buyer remains separate from the creator, so sellers and admins can open order tickets without gaining creator ownership for the buyer. Existing case UUIDs, messages and resolutions are preserved; opening/resolution events are backfilled.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /tickets` | Authorized directory: `{tickets,total,page,limit,counts}`; conversation bodies load only on detail |
+| `POST /tickets` | `{subject,category?,priority?,orderItemId?,message,reason?}`; creates ticket, first message and opening event atomically |
+| `GET /tickets/:id` | `{ticket,permissions:{canClose,canManage}}`; full messages and status events |
+| `POST /tickets/:id/messages` | `{message}`; only authorized participants on Open tickets |
+| `PATCH /tickets/:id` | `{status,note?,resolution?,expectedStatus?}`; note required for Open/Closed, resolution required for Resolved |
+
+Categories: Order, Payment, Account, Store, Product, Other. Priorities: Low, Normal, High. Statuses: Open, Closed, Resolved. Query filters: search, status, category, priority, scope=mine/all, type=order/general, openerRole=buyer/seller/admin, from/to (inclusive UTC dates), sort=updated/newest/oldest/priority, page and limit (default 20, max 50). Counts are scoped to all conversations the caller may access; total reflects the current filters.
+
+Admins see/manage all tickets. General tickets are otherwise creator-only; order tickets also permit the order buyer and item seller to view/reply. Regular users can only transition their own tickets to Closed. Only admins can reopen or resolve. Session authorization is rechecked in each mutation transaction. Ticket row locks serialize replies/status changes; expectedStatus rejects stale changes with 409. Non-open tickets reject replies. Events preserve each closure/reopening/resolution, including actor, note and timestamp.
+
+Legacy /disputes and /admin/disputes routes remain compatible aliases. Legacy resolution-only PATCH requests infer Resolved; new clients send status explicitly. API records retain the legacy disputes/buyer_id column for the actual order buyer; opened_by is always the ownership authority.
+
+Integration tests cover ticket privacy, creator-only closure in both buyer/seller directions, administrative transitions, filters/pagination, concurrent transitions and migration of legacy case history in an isolated transaction.
