@@ -1,4 +1,6 @@
 import express from 'express';
+import { catalogue } from './catalogue.js';
+import { sellingPriceSql } from './merchandising.js';
 import { adminRouter } from './admin-routes.js';
 import { isAllowedOrigin } from './origins.js';
 import { verifyGoogleIdentity } from './google.js';
@@ -95,13 +97,7 @@ app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  await db.query('DELETE FROM sessions WHERE user_id=$1',[req.user!.id]);await createSession(req.user!.id,res,db);
  });res.json({ok:true});
 }));
-app.get('/api/products',route(async(req,res)=>{
- const query=z.object({search:z.string().max(120).optional(),category:z.enum(['Snacks','Oils','Spices','Grains']).optional()}).parse(req.query);
- const clauses=["p.active AND NOT p.admin_delisted AND seller.status='active'"];const params:unknown[]=[];
- if(query.search){params.push(`%${query.search}%`);clauses.push(`(p.name ILIKE $${params.length} OR p.description ILIKE $${params.length} OR a.business_name ILIKE $${params.length})`);}
- if(query.category){params.push(query.category);clauses.push(`p.category=$${params.length}`);}
- res.json({products:await products(clauses.join(' AND '),params)});
-}));
+app.get('/api/products',catalogue);
 app.get('/api/products/:id',route(async(req,res)=>{const product=(await products("p.id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[id(req.params.id)]))[0];if(!product)throw new HttpError(404,'Product not found.');res.json({product});}));
 app.get('/api/products/:id/reviews',route(async(req,res)=>{const {rows}=await pool.query('SELECT r.id,r.rating,r.comment,r.created_at "createdAt",u.name FROM reviews r JOIN users u ON u.id=r.user_id WHERE r.product_id=$1 ORDER BY r.created_at DESC LIMIT 100',[id(req.params.id)]);res.json({reviews:rows});}));
 app.post('/api/products/:id/reviews',requireUser,route(async(req,res)=>{
@@ -151,7 +147,7 @@ app.delete('/api/addresses/:id',requireUser,route(async(req,res)=>{const result=
 app.get('/api/orders',requireUser,route(async(req,res)=>{res.json({orders:await orders('o.buyer_id=$1',[req.user!.id])});}));
 app.get('/api/orders/:id',requireUser,route(async(req,res)=>{const order=(await orders('o.id=$1 AND o.buyer_id=$2',[id(req.params.id),req.user!.id]))[0];if(!order)throw new HttpError(404,'Order not found.');res.json({order});}));
 app.post('/api/orders',requireUser,route(async(req,res)=>{
- const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','paystack']),idempotencyKey:z.string().uuid()}).strict().parse(req.body);
+ const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','paystack']),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
  if(body.paymentMethod==='paystack'&&!config.paystackKey)throw new HttpError(503,'Paystack is not configured. Choose pay on delivery.');
  const orderId=await transaction(async db=>{
  // Serialize checkout with account suspension and cart changes.
@@ -160,16 +156,17 @@ app.post('/api/orders',requireUser,route(async(req,res)=>{
  const prior=await db.query('SELECT id,payment_method,address FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
  if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
  const address=await db.query('SELECT * FROM addresses WHERE id=$1 AND user_id=$2',[body.addressId,req.user!.id]);if(!address.rows[0])throw new HttpError(400,'Choose one of your saved delivery addresses.');
- const {rows:items}=await db.query('SELECT p.*,c.quantity,a.status seller_status,owner.status seller_account_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c',[req.user!.id]);
+ const {rows:items}=await db.query(`SELECT p.*,${sellingPriceSql} selling_price_minor,c.quantity,a.status seller_status,owner.status seller_account_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c`,[req.user!.id]);
  if(!items.length)throw new HttpError(400,'Your basket is empty.');
  if(items.length>100)throw new HttpError(400,'Maximum 100 products per order.');
  for(const item of items){if(!item.active||item.admin_delisted||item.seller_account_status!=='active'||item.seller_status!=='Approved'||item.stock<item.quantity||item.seller_id===req.user!.id)throw new HttpError(409,`${item.name} is unavailable in the requested quantity. Please update your basket.`);}
- const subtotal=items.reduce((total,item)=>total+Number(item.price_minor)*item.quantity,0);
+ const subtotal=items.reduce((total,item)=>total+Number(item.selling_price_minor)*item.quantity,0);
+ if(body.expectedSubtotalMinor!==undefined&&subtotal!==body.expectedSubtotalMinor)throw new HttpError(409,'A product price or promotion has changed. Review the refreshed basket total and place your order again.');
  if(subtotal>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
  if(body.paymentMethod==='paystack'&&subtotal<5000)throw new HttpError(400,'Paystack orders must total at least NGN 50.');
  const newId=randomUUID();const status=body.paymentMethod==='cod'?'Confirmed':'Awaiting Payment';
  await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,total_minor,address) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,JSON.stringify(addressJSON(address.rows[0]))]);
- for(const item of items){await db.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1',[item.id,item.quantity]);await db.query('INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[randomUUID(),newId,item.id,item.seller_id,item.name,item.image,item.unit,item.quantity,item.price_minor,Number(item.price_minor)*item.quantity,status]);}
+ for(const item of items){await db.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1',[item.id,item.quantity]);await db.query('INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[randomUUID(),newId,item.id,item.seller_id,item.name,item.image,item.unit,item.quantity,item.selling_price_minor,Number(item.selling_price_minor)*item.quantity,status]);}
  if(body.paymentMethod==='paystack')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,subtotal]);
  await db.query('DELETE FROM cart_items WHERE user_id=$1',[req.user!.id]);return newId;
  });

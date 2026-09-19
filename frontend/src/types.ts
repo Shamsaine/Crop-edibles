@@ -3,6 +3,7 @@ export interface User { id: string; name: string; email: string; phone: string; 
 export const CATEGORIES = ['Snacks', 'Oils', 'Spices', 'Grains'] as const;
 export interface Product {
   id: string; sellerId: string; name: string; description: string; category: typeof CATEGORIES[number];
+  featured: boolean; basePriceMinor: number; saleKind: 'promo' | 'flash' | null; salePriceMinor: number | null; saleStartsAt: string | null; saleEndsAt: string | null; onSale: boolean; unitsSold: number;
   origin: string; priceMinor: number; price: number; image: string; unit: string;
   rating: number; reviewsCount: number; tags: string[]; vendorName: string; stock: number; active: boolean; sellerActive: boolean; adminDelisted: boolean; flagged: boolean; moderationReason: string;
 }

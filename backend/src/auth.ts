@@ -40,6 +40,7 @@ export const authLimit:RequestHandler=(req,_res,next)=> {
 export function errors(error:any,_req:Request,res:Response,_next:NextFunction) {
   if(error instanceof ZodError) { res.status(400).json({error:'Please check your input.',details:error.issues.map(({path,message})=>({path:path.join('.'),message}))}); return; }
   if(error instanceof HttpError) {res.status(error.status).json({error:error.message});return;}
+  if(error.code==='23514' && error.constraint==='products_sale_valid') {res.status(400).json({error:'The regular price must be higher than the scheduled sale price. Ask an admin to update or remove the promotion first.'});return;}
   if(error.code==='23505') {res.status(409).json({error:'This record already exists.'});return;}
   if(error.type==='entity.parse.failed') {res.status(400).json({error:'Invalid JSON.'});return;}
   if(error.type==='entity.too.large') {res.status(413).json({error:'Request too large.'});return;}
