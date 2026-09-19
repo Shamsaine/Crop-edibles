@@ -67,3 +67,19 @@ origins separated by commas, without paths. The current .env explicitly allows
 http://172.20.80.1:3000. Development also allows this computer's local interfaces
 on the configured frontend port. Production uses only the explicit configured origins.
 Restart the API after changing .env. Do not use a wildcard origin or remove CSRF checks.
+
+## Admin dashboard and moderation
+
+Open http://localhost:3000/#admin and sign in with your administrator account.
+
+- **Accounts → Create admin:** enter the name, email and initial password. The new administrator can sign in immediately and change their password under Account. Credentials are not emailed automatically.
+- **Accounts → Manage:** flag/unflag, suspend, restore or delete account access. A reason is required. Deletion also requires typing the account email. Suspension and deletion revoke all sessions, block both password and Google login, and hide seller listings from shopping and checkout.
+- Deletion is a recoverable access deletion: linked account and transaction records remain in the database to preserve order history. It is not personal-data erasure. Administrators cannot suspend/delete their own account; at least one active administrator must remain.
+- **Vendors → View store:** see the business profile, location, inventory, rating and complaint counts. Click **Inspect** on any product to view its description, stock, customer reviews/comments, support conversations and moderation history.
+- **Products → Inspect → Moderate listing:** flag for review or delist, with a reason. Flags alone do not remove a listing. Delisting blocks new purchases even for items already in a basket; sellers cannot override it. Removing admin delisting preserves the seller's own published/archived choice. Existing orders remain available for fulfillment and support.
+- Search and paginate the account, vendor and product directories. Filter by role/status, flags, location and age; product filters also include category, stock, price, rating and complaints. Age means time since the account or listing was created, not a person's age. Locations come from seller applications, buyer addresses and product origins.
+- The overview shows current counts, seven days of order activity, review queues and recent moderation actions. All values come from PostgreSQL.
+
+Google sign-in reads GOOGLE_CLIENT_ID from the root .env when the API starts. Restart the API after changing it. Test at http://localhost:3000/#auth, and add http://localhost and http://localhost:3000 to the Web client's Authorized JavaScript origins in Google Cloud. Google sign-in cannot use the private-IP HTTP development URL; deploy with HTTPS for non-localhost access. See [Google's setup instructions](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
+
+Success notifications disappear after four seconds. Notifications also have a dismiss button, and action feedback clears when navigating between pages.

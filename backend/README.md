@@ -117,4 +117,24 @@ Product PATCH only changes supplied fields. Clients may send expectedStock with 
 
 Set GOOGLE_CLIENT_ID to your Google OAuth Web Client ID. GET /config exposes only this public identifier. POST /auth/google accepts {credential,accountType?}; the backend uses Google signature/expiry/audience verification and requires a verified email. New Google identities receive a session with no local password. POST /account/google links Google to the signed-in account after verifying that emails match. Existing identities are not silently linked by matching email. Profile edits survive later Google sign-ins.
 
-The users account_type records buyer/seller registration intent separately from the authorized role. Admin creation stays CLI-only. Browser writes allow APP_URL and exact ALLOWED_ORIGINS; local-interface aliases on the same frontend port are added only outside production. See ../docs/FIRST_CHECKOUT.md for setup and first-product instructions.
+The users account_type records buyer/seller registration intent separately from the authorized role. The first admin is provisioned through the CLI; existing admins can create additional admins from the dashboard. Browser writes allow APP_URL and exact ALLOWED_ORIGINS; local-interface aliases on the same frontend port are added only outside production. See ../docs/FIRST_CHECKOUT.md for setup and first-product instructions.
+
+
+## Administration directories and moderation
+
+Migration 005 adds account status/flags, independent admin delisting, and an append-only moderation log. All endpoints below require an active admin session.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /admin/overview` | Current metrics, seven daily order counts/paid values and recent moderation actions |
+| `POST /admin/admins` | Create `{name,email,password}`; no promotion by self-registration or email matching |
+| `GET /admin/users`, `GET /admin/vendors` | Paginated account/vendor directories with `search`, `location`, `role`, `status`, `flagged`, `age`, `sort`, `page`, `limit` |
+| `GET /admin/vendors/:id` | Vendor profile, counts, rating and account moderation history |
+| `PATCH /admin/users/:id` | `{status?,flagged?,reason,confirmEmail?}`; status active/suspended/deleted; exact email confirmation required for deletion |
+| `GET /admin/products` | Paginated catalog including hidden products; base filters plus `sellerId`, `category`, `visibility`, `stock`, `minRating`, `maxRating`, `minPrice`, `maxPrice`, `complaints` |
+| `GET /admin/products/:id` | Product, latest 100 reviews, latest 200 support cases with messages, latest 50 moderation events |
+| `PATCH /admin/products/:id` | `{flagged?,delisted?,reason}`; seller publishing and admin delisting remain independent |
+
+Omit unused filters. Pages default to 20 rows (maximum 50); `age` accepts 7, 30, 90 or older90, based on creation time. `flagged` is true/false. Sorts include newest, oldest, name, complaints, rating (lowest first), and for products stock/price (lowest first). Price filters are NGN; stored/returned prices are integer kobo. Stock filters: in, low (1–9), out. Visibility: listed, archived, delisted. Complaints: any, open. Account/vendor location comes from the seller application or primary address; product location matches origin or vendor location.
+
+Moderation actions record actor, reason and timestamp transactionally. Account suspension/deletion revoke sessions and block local/Google login. Account deletion is soft deletion preserving records and can be restored; it does not erase personal data. Deleted emails remain reserved. Self-suspension/deletion and removal of the last active admin are blocked. Product delisting is enforced in public catalog, wishlist, cart writes and checkout. Existing orders are retained. Tests use isolated schemas and cover these authorization and visibility guarantees.

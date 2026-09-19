@@ -89,3 +89,7 @@ Production requires HTTPS, NODE_ENV=production for secure session cookies, an
 APP_URL matching the deployed browser origin, and a reverse proxy that serves
 the frontend build and forwards /api to the backend. Do not expose database
 credentials or the PostgreSQL port publicly.
+
+## Administrator workspace
+
+Visit `/#admin` with an administrator account. The dashboard includes searchable accounts, vendor stores, product reviews/complaints, moderation controls, administrator creation, orders, payments and support. See [the admin workflow guide](docs/FIRST_CHECKOUT.md#admin-dashboard-and-moderation) for account suspension/deletion, product delisting and Google setup.

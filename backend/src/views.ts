@@ -1,9 +1,9 @@
 import { pool, type DB } from './db.js';
 export const money=(minor:number|string)=>new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:2}).format(Number(minor)/100);
-const productSelect=`SELECT p.*,a.business_name,COALESCE(r.rating,0) rating,COALESCE(r.count,0) reviews_count
-FROM products p JOIN seller_applications a ON a.user_id=p.seller_id AND a.status='Approved'
+const productSelect=`SELECT p.*,seller.status seller_account_status,a.business_name,COALESCE(r.rating,0) rating,COALESCE(r.count,0) reviews_count
+FROM products p JOIN users seller ON seller.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id AND a.status='Approved'
 LEFT JOIN (SELECT product_id,round(avg(rating),1) rating,count(*) count FROM reviews GROUP BY product_id) r ON r.product_id=p.id`;
-export function productJSON(row:any) {return {id:row.id,sellerId:row.seller_id,name:row.name,description:row.description,category:row.category,categoryLabel:`${row.category} · ${row.origin}`,origin:row.origin,price:Number(row.price_minor)/100,priceMinor:Number(row.price_minor),priceFormatted:money(row.price_minor),rating:Number(row.rating),reviewsCount:Number(row.reviews_count),image:row.image,tags:row.tags,vendorName:row.business_name,stock:row.stock,unit:row.unit,active:row.active};}
+export function productJSON(row:any) {return {id:row.id,sellerId:row.seller_id,name:row.name,description:row.description,category:row.category,categoryLabel:`${row.category} · ${row.origin}`,origin:row.origin,price:Number(row.price_minor)/100,priceMinor:Number(row.price_minor),priceFormatted:money(row.price_minor),rating:Number(row.rating),reviewsCount:Number(row.reviews_count),image:row.image,tags:row.tags,vendorName:row.business_name,stock:row.stock,unit:row.unit,active:row.active&&!row.admin_delisted&&row.seller_account_status==='active',sellerActive:row.active,adminDelisted:row.admin_delisted,flagged:row.flagged,moderationReason:row.moderation_reason};}
 export async function products(where='p.active',params:unknown[]=[],db:DB=pool) {const {rows}=await db.query(`${productSelect} WHERE ${where} ORDER BY p.created_at DESC LIMIT 500`,params);return rows.map(productJSON);}
 export async function cart(userId:string,db:DB=pool) {
  const {rows}=await db.query(`${productSelect.replace('SELECT p.*,','SELECT p.*,c.quantity,')} JOIN cart_items c ON c.product_id=p.id WHERE c.user_id=$1 ORDER BY p.id`,[userId]);

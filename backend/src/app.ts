@@ -1,4 +1,5 @@
 import express from 'express';
+import { adminRouter } from './admin-routes.js';
 import { isAllowedOrigin } from './origins.js';
 import { verifyGoogleIdentity } from './google.js';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
@@ -49,6 +50,7 @@ app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  if(!row || !row.password_hash){await hashPassword(body.password);throw new HttpError(401,'Email or password is incorrect.');}
  if(!await verifyPassword(body.password,row.password_hash))throw new HttpError(401,'Email or password is incorrect.');
  const oldToken=cookieToken(req);if(oldToken)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
+ if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
  await createSession(row.id,res);res.json({user:userJSON(row)});
 }));
 app.post('/api/auth/google',authLimit,route(async(req,res)=>{
@@ -63,6 +65,7 @@ app.post('/api/auth/google',authLimit,route(async(req,res)=>{
    if(existing.rowCount)throw new HttpError(409,'An account already uses this email. Sign in with your password, then connect Google from Account.');
    const created=await db.query('INSERT INTO users(id,email,name,password_hash,google_subject,account_type) VALUES($1,$2,$3,NULL,$4,$5) RETURNING *',[randomUUID(),identity.email,identity.name,identity.sub,body.accountType]);row=created.rows[0];
   }
+  if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
   const oldToken=cookieToken(req);if(oldToken)await db.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
   await createSession(row.id,res,db);return userJSON(row);
  });res.json({user});
@@ -94,12 +97,12 @@ app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.get('/api/products',route(async(req,res)=>{
  const query=z.object({search:z.string().max(120).optional(),category:z.enum(['Snacks','Oils','Spices','Grains']).optional()}).parse(req.query);
- const clauses=['p.active'];const params:unknown[]=[];
+ const clauses=["p.active AND NOT p.admin_delisted AND seller.status='active'"];const params:unknown[]=[];
  if(query.search){params.push(`%${query.search}%`);clauses.push(`(p.name ILIKE $${params.length} OR p.description ILIKE $${params.length} OR a.business_name ILIKE $${params.length})`);}
  if(query.category){params.push(query.category);clauses.push(`p.category=$${params.length}`);}
  res.json({products:await products(clauses.join(' AND '),params)});
 }));
-app.get('/api/products/:id',route(async(req,res)=>{const product=(await products('p.id=$1 AND p.active',[id(req.params.id)]))[0];if(!product)throw new HttpError(404,'Product not found.');res.json({product});}));
+app.get('/api/products/:id',route(async(req,res)=>{const product=(await products("p.id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[id(req.params.id)]))[0];if(!product)throw new HttpError(404,'Product not found.');res.json({product});}));
 app.get('/api/products/:id/reviews',route(async(req,res)=>{const {rows}=await pool.query('SELECT r.id,r.rating,r.comment,r.created_at "createdAt",u.name FROM reviews r JOIN users u ON u.id=r.user_id WHERE r.product_id=$1 ORDER BY r.created_at DESC LIMIT 100',[id(req.params.id)]);res.json({reviews:rows});}));
 app.post('/api/products/:id/reviews',requireUser,route(async(req,res)=>{
  const productId=id(req.params.id);const body=z.object({rating:z.number().int().min(1).max(5),comment:required(2000)}).strict().parse(req.body);
@@ -113,7 +116,7 @@ app.put('/api/cart/:id',requireUser,route(async(req,res)=>{
  await transaction(async db=>{
  await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
  if(!quantity){await db.query('DELETE FROM cart_items WHERE user_id=$1 AND product_id=$2',[req.user!.id,productId]);return;}
- const {rows}=await db.query('SELECT p.stock,p.seller_id FROM products p JOIN seller_applications a ON a.user_id=p.seller_id WHERE p.id=$1 AND p.active AND a.status=\'Approved\' FOR SHARE OF p',[productId]);
+ const {rows}=await db.query('SELECT p.stock,p.seller_id FROM products p JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE p.id=$1 AND p.active AND NOT p.admin_delisted AND owner.status=\'active\' AND a.status=\'Approved\' FOR SHARE OF p',[productId]);
  if(!rows[0])throw new HttpError(404,'Product is unavailable.');
  if(rows[0].seller_id===req.user!.id)throw new HttpError(400,'You cannot purchase your own product.');
  if(rows[0].stock<quantity)throw new HttpError(409,'Requested quantity exceeds available stock.');
@@ -123,10 +126,10 @@ app.put('/api/cart/:id',requireUser,route(async(req,res)=>{
 app.delete('/api/cart/:id',requireUser,route(async(req,res)=>{
  await transaction(async db=>{await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);await db.query('DELETE FROM cart_items WHERE user_id=$1 AND product_id=$2',[req.user!.id,id(req.params.id)]);});res.json(await cart(req.user!.id));
 }));
-app.get('/api/wishlist',requireUser,route(async(req,res)=>{const list=await products('p.active AND p.id IN (SELECT product_id FROM wishlists WHERE user_id=$1)',[req.user!.id]);res.json({products:list,productIds:list.map(product=>product.id)});}));
+app.get('/api/wishlist',requireUser,route(async(req,res)=>{const list=await products("p.active AND NOT p.admin_delisted AND seller.status='active' AND p.id IN (SELECT product_id FROM wishlists WHERE user_id=$1)",[req.user!.id]);res.json({products:list,productIds:list.map(product=>product.id)});}));
 app.put('/api/wishlist/:id',requireUser,route(async(req,res)=>{
  const productId=id(req.params.id);const {saved}=z.object({saved:z.boolean()}).strict().parse(req.body);
- if(saved){const found=await products('p.active AND p.id=$1',[productId]);if(!found.length)throw new HttpError(404,'Product not found.');await pool.query('INSERT INTO wishlists(user_id,product_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.user!.id,productId]);}
+ if(saved){const found=await products("p.active AND NOT p.admin_delisted AND seller.status='active' AND p.id=$1",[productId]);if(!found.length)throw new HttpError(404,'Product not found.');await pool.query('INSERT INTO wishlists(user_id,product_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.user!.id,productId]);}
  else await pool.query('DELETE FROM wishlists WHERE user_id=$1 AND product_id=$2',[req.user!.id,productId]);res.json({ok:true});
 }));
 const addressSchema=z.object({label:required(80),recipientName:required(120),phone:required(30),line1:required(250),line2:z.string().trim().max(250).default(''),city:required(120),state:required(120),postalCode:z.string().trim().max(30).default(''),isDefault:z.boolean().default(false)}).strict();
@@ -151,15 +154,16 @@ app.post('/api/orders',requireUser,route(async(req,res)=>{
  const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','paystack']),idempotencyKey:z.string().uuid()}).strict().parse(req.body);
  if(body.paymentMethod==='paystack'&&!config.paystackKey)throw new HttpError(503,'Paystack is not configured. Choose pay on delivery.');
  const orderId=await transaction(async db=>{
- // Serialize cart mutation/checkouts for this buyer before locking products in stable order.
- await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
+ // Serialize checkout with account suspension and cart changes.
+ const buyer=await db.query('SELECT status FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
+ if(buyer.rows[0]?.status!=='active')throw new HttpError(403,'Account is unavailable.');
  const prior=await db.query('SELECT id,payment_method,address FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
  if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
  const address=await db.query('SELECT * FROM addresses WHERE id=$1 AND user_id=$2',[body.addressId,req.user!.id]);if(!address.rows[0])throw new HttpError(400,'Choose one of your saved delivery addresses.');
- const {rows:items}=await db.query('SELECT p.*,c.quantity,a.status seller_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c',[req.user!.id]);
+ const {rows:items}=await db.query('SELECT p.*,c.quantity,a.status seller_status,owner.status seller_account_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c',[req.user!.id]);
  if(!items.length)throw new HttpError(400,'Your basket is empty.');
  if(items.length>100)throw new HttpError(400,'Maximum 100 products per order.');
- for(const item of items){if(!item.active||item.seller_status!=='Approved'||item.stock<item.quantity||item.seller_id===req.user!.id)throw new HttpError(409,`${item.name} is unavailable in the requested quantity. Please update your basket.`);}
+ for(const item of items){if(!item.active||item.admin_delisted||item.seller_account_status!=='active'||item.seller_status!=='Approved'||item.stock<item.quantity||item.seller_id===req.user!.id)throw new HttpError(409,`${item.name} is unavailable in the requested quantity. Please update your basket.`);}
  const subtotal=items.reduce((total,item)=>total+Number(item.price_minor)*item.quantity,0);
  if(subtotal>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
  if(body.paymentMethod==='paystack'&&subtotal<5000)throw new HttpError(400,'Paystack orders must total at least NGN 50.');
@@ -270,6 +274,8 @@ app.get('/api/admin/applications',role('admin'),route(async(_req,res)=>res.json(
 app.patch('/api/admin/applications/:id',role('admin'),route(async(req,res)=>{
  const applicationId=id(req.params.id);const body=z.object({status:z.enum(['Approved','Rejected']),adminNotes:z.string().trim().max(2000).default('')}).strict().parse(req.body);
  await transaction(async db=>{
+ const applicant=await db.query('SELECT u.status FROM users u JOIN seller_applications a ON a.user_id=u.id WHERE a.id=$1 FOR UPDATE OF u',[applicationId]);
+ if(applicant.rows[0]&&applicant.rows[0].status!=='active')throw new HttpError(409,'Restore the applicant account before reviewing this application.');
  const {rows}=await db.query('SELECT * FROM seller_applications WHERE id=$1 FOR UPDATE',[applicationId]);const application=rows[0];if(!application)throw new HttpError(404,'Application not found.');if(application.status!=='Pending')throw new HttpError(409,'This application has already been reviewed.');
  await db.query('UPDATE seller_applications SET status=$2,admin_notes=$3,reviewed_by=$4,updated_at=now() WHERE id=$1',[applicationId,body.status,body.adminNotes,req.user!.id]);
  if(body.status==='Approved')await db.query("UPDATE users SET role='seller' WHERE id=$1 AND role='buyer'",[application.user_id]);
@@ -289,5 +295,6 @@ app.patch('/api/admin/disputes/:id',role('admin'),route(async(req,res)=>{
 app.get('/api/admin/metrics',role('admin'),route(async(_req,res)=>{
  const {rows}=await pool.query("SELECT (SELECT count(*) FROM users)::int users_count,(SELECT count(*) FROM users WHERE role='seller')::int sellers_count,(SELECT count(*) FROM products WHERE active)::int products_count,(SELECT count(*) FROM orders)::int orders_count,(SELECT COALESCE(sum(total_minor),0) FROM orders WHERE payment_status='Paid') revenue_minor,(SELECT count(*) FROM seller_applications WHERE status='Pending')::int pending_applications_count,(SELECT count(*) FROM disputes WHERE status='Open')::int open_disputes_count");const row=rows[0];res.json({metrics:{usersCount:row.users_count,sellersCount:row.sellers_count,productsCount:row.products_count,ordersCount:row.orders_count,revenueMinor:Number(row.revenue_minor),pendingApplicationsCount:row.pending_applications_count,openDisputesCount:row.open_disputes_count}});
 }));
+app.use('/api/admin',role('admin'),adminRouter);
 app.use('/api',(_req,res)=>res.status(404).json({error:'Endpoint not found.'}));
 app.use(errors);
