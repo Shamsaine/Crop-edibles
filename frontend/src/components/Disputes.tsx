@@ -1,0 +1,15 @@
+﻿import { type FormEvent } from 'react';
+import { date, mutate, useAction, useResource } from '../api';
+import type { Dispute } from '../types';
+import { Empty, Feedback, Loading, SectionTitle } from './UI';
+function Case({ item, admin, onChange }: { item: Dispute; admin: boolean; onChange: () => void }) {
+  const action = useAction(onChange);
+  const reply = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const element = event.currentTarget; const form = new FormData(element); void action.run(async () => { await mutate('/disputes/' + item.id + '/messages', 'POST', { message: form.get('message') }); element.reset(); }, 'Message sent.'); };
+  const resolve = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); void action.run(() => mutate('/admin/disputes/' + item.id, 'PATCH', { resolution: form.get('resolution') }), 'Case resolved.'); };
+  return <article className="panel"><div className="order-heading"><div><p className="eyebrow">{item.reason} · {date(item.createdAt)}</p><h2>{item.productName}</h2><p className="muted small">{item.customerName} · {item.vendorName} · Order {item.orderId.slice(0,8).toUpperCase()}</p></div><span className="badge">{item.status}</span></div><Feedback error={action.error} success={action.success} /><div className="message-list">{item.messages.map(message => <div className={'message ' + (message.sender === 'system' ? 'staff' : '')} key={message.id}><div><strong>{message.senderName}</strong><span className="muted small">{date(message.createdAt)}</span></div><p className="preserve-lines">{message.message}</p></div>)}</div>{item.resolution && <p className="notice"><strong>Resolution:</strong> {item.resolution}</p>}{item.status === 'Open' && <><form className="form-stack" onSubmit={reply}><label>Reply to this case<textarea name="message" required maxLength={5000} rows={3} /></label><button className="button secondary" disabled={action.busy}>Send reply</button></form>{admin && <details><summary>Resolve this case</summary><form className="form-stack" onSubmit={resolve}><label>Resolution<textarea name="resolution" required maxLength={3000} rows={3} /></label><p className="muted small">This closes the support case. Any agreed refund or replacement must be handled separately.</p><button className="button primary" disabled={action.busy}>Save resolution & close case</button></form></details>}</>}</article>;
+}
+export default function Disputes({ revision, onChange, admin = false }: { revision: number; onChange: () => void; admin?: boolean }) {
+  const resource = useResource<{ disputes: Dispute[] }>(admin ? '/admin/disputes' : '/disputes', revision);
+  return <><SectionTitle eyebrow="HERE TO HELP" title="Support cases" /><p className="muted">Open a case from an item in your orders. Conversations are shared with the buyer, seller, and administrators.</p><Feedback error={resource.error} />{resource.loading ? <Loading /> : !resource.data?.disputes.length ? <Empty>No support cases yet.</Empty> : resource.data.disputes.map(item => <Case key={item.id} item={item} admin={admin} onChange={onChange} />)}</>;
+}
+
