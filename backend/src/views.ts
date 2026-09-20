@@ -1,3 +1,4 @@
+import { storeRegistration } from './vendors.js';
 import { pool, type DB } from './db.js';
 import { activeSaleSql, sellingPriceSql, merchandisingJSON } from './merchandising.js';
 export const money=(minor:number|string)=>new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:2}).format(Number(minor)/100);
@@ -23,6 +24,6 @@ export async function orders(where:string,params:unknown[],db:DB=pool,sellerId?:
   return {id:row.id,createdAt:row.created_at,status:row.status,paymentMethod:row.payment_method,paymentStatus:row.payment_status,paymentReference:row.payment_reference,subtotalMinor,deliveryFeeMinor:sellerId?0:Number(row.delivery_fee_minor),totalMinor:sellerId?subtotalMinor:Number(row.total_minor),totalFormatted:money(sellerId?subtotalMinor:row.total_minor),address:row.address,items};
  });
 }
-export function applicationJSON(row:any){return {id:row.id,businessName:row.business_name,legalEntityName:row.legal_entity_name,registrationNumber:row.registration_number,category:row.category,location:row.location,phone:row.phone,description:row.description,logo:'',submittedDaysAgo:Math.floor((Date.now()-new Date(row.created_at).getTime())/86400000),status:row.status,adminNotes:row.admin_notes,contactPerson:{name:row.name,email:row.email,phone:row.phone,role:'Owner',avatar:''},documents:[],sampleInventory:[]};}
+export function applicationJSON(row:any){return {id:row.id,businessName:row.business_name,legalEntityName:row.legal_entity_name,registrationNumber:storeRegistration(row.registration_sequence),legacyRegistrationNumber:row.registration_number,category:row.category,location:row.location,phone:row.phone,description:row.description,logo:'',submittedDaysAgo:Math.floor((Date.now()-new Date(row.created_at).getTime())/86400000),status:row.status,adminNotes:row.admin_notes,contactPerson:{name:row.name,email:row.email,phone:row.phone,role:'Owner',avatar:''},documents:[],sampleInventory:[]};}
 export async function applications(where:string,params:unknown[],db:DB=pool){const {rows}=await db.query(`SELECT a.*,u.name,u.email FROM seller_applications a JOIN users u ON u.id=a.user_id WHERE ${where} ORDER BY a.created_at DESC`,params);return rows.map(applicationJSON);}
 export { ticketDetails as disputes } from './ticket-views.js';

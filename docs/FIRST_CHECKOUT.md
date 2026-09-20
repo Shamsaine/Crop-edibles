@@ -1,4 +1,4 @@
-# Register accounts and test your first checkout
+﻿# Register accounts and test your first checkout
 
 Use http://localhost:3000 on the development computer. Email registration also
 works at http://172.20.80.1:3000 on this local network. Google sign-in requires
@@ -14,9 +14,10 @@ After signing in, choose Administration. No new administrator registration is ne
 ## First seller and product
 
 1. Sign out, choose Sign in, then New here? Create an account.
-2. Select Seller. Register with email/password, or use Google after configuring it.
-3. You land in Account. Complete the business application under Sell on Edible Shop
-   and submit it. Seller registration saves the choice; publishing awaits approval.
+2. Select Vendor / seller. For email signup, enter your personal credentials and business
+   information on the registration page. Your Edible Shop store reference is generated.
+3. Submit to create your account and send the store application to the admin queue.
+   If using Google, register first, then open Profile → Store application when ready.
 4. Sign out, sign in as the administrator, open Administration ? Seller applications,
    and approve that application.
 5. Sign back in as the seller (or click Refresh if using another browser session).
@@ -27,8 +28,8 @@ After signing in, choose Administration. No new administrator registration is ne
 
 1. Use a separate email/account: sign out, create an account and select Buyer.
    Sellers cannot buy their own listings.
-2. In Account, add a delivery address with recipient name, phone, street, city, and state.
-3. Browse Marketplace, add the seller's product, and open Basket.
+2. In Profile → Delivery addresses, add a delivery address with recipient name, phone, street, city, and state.
+3. Browse The pantry, add the seller's product, and open Basket.
 4. Choose the saved address and Pay on delivery, then place the order.
    Paystack additionally needs PAYSTACK_SECRET_KEY and an order of at least NGN 50.
 5. Open Orders to see the saved order. Refresh or sign back in to confirm persistence.
@@ -54,7 +55,7 @@ After signing in, choose Administration. No new administrator registration is ne
 Google users can edit their name, phone and delivery addresses in Account.
 Subsequent Google sign-ins preserve these profile changes. If an email/password
 account already exists for the same email, sign in using the password first,
-then connect Google in Account ? Sign-in methods. This avoids silently merging identities.
+then connect Google in Profile → Security. This avoids silently merging identities.
 The existing administrator can connect Google this way too.
 
 Google setup: https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid
@@ -107,3 +108,12 @@ Administrators open **Administration → Support**. Orders, Saved and Support ar
 - Closed and Resolved tickets remain readable but accept no replies until an admin reopens them. Reopening preserves every earlier comment and resolution. Users can open a new ticket if further help is needed.
 
 Existing support cases were migrated in place: their IDs, messages, order links and resolutions are retained, with ticket references and history added. Recording a resolution does not issue a refund.
+
+
+## Buyer and seller profiles
+
+Profile (`/#account`) opens a summary of personal details. Choose Edit profile to update your name/phone or Add more information to enter city, state and a short bio. Delivery addresses and Security are separate account sections; checkout links straight to Delivery addresses.
+
+Buyers can choose Apply as a seller to open their own store form at `/#account/store`. Email vendor signup submits these same business details immediately. Google signup, for either account type, leaves store submission until later. Registration never grants automatic publishing access.
+
+The store application page shows Pending, Approved or Rejected status and administrator feedback. Rejected applicants can correct and resubmit their details, keeping the same generated registration reference. Approval enables My store and product publishing; the account can still shop as a buyer.

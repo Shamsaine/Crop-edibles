@@ -1,5 +1,5 @@
 export type UserRole = 'buyer' | 'seller' | 'admin';
-export interface User { id: string; name: string; email: string; phone: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
+export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
 export const CATEGORIES = ['Snacks', 'Oils', 'Spices', 'Grains'] as const;
 export interface Product {
   id: string; sellerId: string; name: string; description: string; category: typeof CATEGORIES[number];
@@ -24,7 +24,7 @@ export interface Order {
   paymentReference?: string;
 }
 export interface VendorApplication {
-  id: string; businessName: string; legalEntityName: string; registrationNumber: string; category: string;
+  id: string; businessName: string; legalEntityName: string; registrationNumber: string; legacyRegistrationNumber?: string; category: string;
   location: string; phone?: string; description?: string; status: 'Pending' | 'Approved' | 'Rejected'; adminNotes?: string;
   contactPerson?: { name: string; email: string; phone: string }; createdAt?: string;
 }

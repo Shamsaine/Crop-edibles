@@ -76,9 +76,9 @@ All routes are under `/api`, use JSON, and return `{error: string, details?: [..
 | Method and path | Access / behavior |
 | --- | --- |
 | `GET /health`, `GET /config` | Database liveness and enabled payment options |
-| `POST /auth/register` | `{name,email,password}` → `{user}`; role is always buyer |
+| `POST /auth/register` | `{name,email,password,accountType?,business?}` → `{user}`; email seller signup requires business details, role remains buyer until approval |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | Sign in/out/current server user |
-| `PATCH /account` | `{name,phone}` updates own profile |
+| `PATCH /account` | Partial `{name,phone,city,state,bio}` updates own profile |
 | `POST /account/password` | `{currentPassword,password}`; invalidates all old sessions |
 | `GET /products?search=&category=` | Public active approved-seller catalog; omit absent query filters |
 | `GET /products/:id` | Active product detail |
@@ -103,7 +103,7 @@ All routes are under `/api`, use JSON, and return `{error: string, details?: [..
 | `GET /admin/payments`, `POST /admin/payments/:reference/verify` | Payment reconciliation visibility/manual reverify |
 | `GET /admin/disputes`, `PATCH /admin/disputes/:id` | Resolve with `{resolution}` |
 
-Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `state`, `postalCode`, `isDefault`. Seller application fields: `businessName`, `legalEntityName`, `registrationNumber`, `category`, `location`, `phone`, `description`. Product writes: `name`, `description`, `category`, `origin`, `priceMinor`, `stock`, `image` (HTTPS URL or empty), `unit`, `tags`, `active`. Categories are Snacks, Oils, Spices and Grains.
+Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `state`, `postalCode`, `isDefault`. Seller application fields: `businessName`, `legalEntityName`, `category`, `location`, `phone`, `description`. Product writes: `name`, `description`, `category`, `origin`, `priceMinor`, `stock`, `image` (HTTPS URL or empty), `unit`, `tags`, `active`. Categories are Snacks, Oils, Spices and Grains.
 
 ## Validation
 
@@ -168,3 +168,14 @@ Admins see/manage all tickets. General tickets are otherwise creator-only; order
 Legacy /disputes and /admin/disputes routes remain compatible aliases. Legacy resolution-only PATCH requests infer Resolved; new clients send status explicitly. API records retain the legacy disputes/buyer_id column for the actual order buyer; opened_by is always the ownership authority.
 
 Integration tests cover ticket privacy, creator-only closure in both buyer/seller directions, administrative transitions, filters/pagination, concurrent transitions and migration of legacy case history in an isolated transaction.
+
+
+## Profiles and vendor registration
+
+Migration 008 adds optional profile city/state/bio and a unique generated registration sequence to store applications. Application responses expose registrationNumber as an Edible Shop reference such as EDS-001001. Earlier manually supplied registration_number values remain stored and are returned as legacyRegistrationNumber for administrator review. This reference is a marketplace identifier, not a government business-registration certificate.
+
+Email registration accepts `{name,email,password,accountType:"buyer"|"seller",business?}`. Buyers keep simple signup; business must be omitted. Sellers must include `{businessName,legalEntityName,category,location,phone,description?}`. Account creation, Pending application creation and session creation use one database transaction. A rejected/invalid signup cannot leave a partial account. All accounts retain buyer privileges; seller privileges begin only after admin approval.
+
+Google registration still accepts only `{credential,accountType?}` and never auto-submits a store application. Google users and existing buyers can later use POST /seller/application with the same business fields. The server supplies the application owner and registration reference. Pending/Approved duplicates are rejected; rejected applicants reuse their application ID and registration number when resubmitting. Submitting updates account_type to seller without promoting role. Previously supplied registrationNumber fields are no longer accepted in writes.
+
+PATCH /account accepts any nonempty subset of name, phone, city, state and bio. Omitted fields are preserved; role/email/owner changes are rejected. GET /auth/me and auth responses include the additional profile fields. Checkout addresses remain separate from profile location.

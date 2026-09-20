@@ -1,4 +1,5 @@
 import express from 'express';
+import { businessSchema, submitStoreApplication } from './vendors.js';
 import { ticketsRouter, listTickets, changeTicket } from './tickets.js';
 import { catalogue } from './catalogue.js';
 import { sellingPriceSql } from './merchandising.js';
@@ -40,9 +41,12 @@ app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,pa
 app.use('/api',sessionMiddleware);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
- const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer')}).strict().parse(req.body);
+ const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
+ if(body.accountType==='seller'&&!body.business)throw new HttpError(400,'Complete your business information to register as a vendor.');
+ if(body.accountType==='buyer'&&body.business)throw new HttpError(400,'Buyer registration does not require business information. Apply for a store from your profile later.');
  const user=await transaction(async db=>{
   const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type) VALUES($1,$2,$3,$4,$5) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
+  if(body.business)await submitStoreApplication(db,rows[0].id,body.business);
   await createSession(rows[0].id,res,db);return userJSON(rows[0]);
  });res.status(201).json({user});
 }));
@@ -85,8 +89,11 @@ app.post('/api/account/google',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.post('/api/auth/logout',route(async(req,res)=>{const token=cookieToken(req);if(token)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(token)]);clearSession(res);res.json({ok:true});}));
 app.patch('/api/account',requireUser,route(async(req,res)=>{
- const body=z.object({name:required(120),phone:z.string().trim().max(30)}).strict().parse(req.body);
- const {rows}=await pool.query('UPDATE users SET name=$2,phone=$3 WHERE id=$1 RETURNING *',[req.user!.id,body.name,body.phone]);res.json({user:userJSON(rows[0])});
+ const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000)}).partial().strict().parse(req.body);
+ if(!Object.keys(body).length)throw new HttpError(400,'No profile changes provided.');
+ const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${key}=$${values.length}`;});
+ const {rows}=await pool.query(`UPDATE users SET ${assignments.join(',')} WHERE id=$1 AND status='active' RETURNING *`,values);
+ if(!rows[0])throw new HttpError(403,'Account access is unavailable.');res.json({user:userJSON(rows[0])});
 }));
 app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  const body=z.object({currentPassword:z.string().max(128),password:passwordSchema}).strict().parse(req.body);
@@ -190,18 +197,11 @@ app.post('/api/orders/:id/cancel',requireUser,route(async(req,res)=>{
  await releaseStock(db,orderId);await db.query("UPDATE orders SET status='Cancelled',payment_status='Cancelled',updated_at=now() WHERE id=$1",[orderId]);await db.query("UPDATE order_items SET status='Cancelled' WHERE order_id=$1",[orderId]);
  });res.json({order:(await orders('o.id=$1',[orderId]))[0]});
 }));
-const applicationSchema=z.object({businessName:required(160),legalEntityName:required(200),registrationNumber:required(80),category:z.enum(['Snacks','Oils','Spices','Grains']),location:required(200),phone:required(30),description:z.string().trim().max(3000).default('')}).strict();
 app.get('/api/seller/application',requireUser,route(async(req,res)=>res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]||null})));
 app.post('/api/seller/application',requireUser,route(async(req,res)=>{
- if(req.user!.role==='admin')throw new HttpError(403,'Administrators cannot apply as sellers.');
- const body=applicationSchema.parse(req.body);
- await transaction(async db=>{
- await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
- const {rows}=await db.query('SELECT * FROM seller_applications WHERE user_id=$1 FOR UPDATE',[req.user!.id]);
- if(rows[0]&&rows[0].status!=='Rejected')throw new HttpError(409,'You already have a pending or approved application.');
- const values=[rows[0]?.id||randomUUID(),req.user!.id,body.businessName,body.legalEntityName,body.registrationNumber,body.category,body.location,body.phone,body.description];
- await db.query("INSERT INTO seller_applications(id,user_id,business_name,legal_entity_name,registration_number,category,location,phone,description) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id) DO UPDATE SET business_name=$3,legal_entity_name=$4,registration_number=$5,category=$6,location=$7,phone=$8,description=$9,status='Pending',admin_notes='',reviewed_by=NULL,updated_at=now()",values);
- });res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
+ const body=businessSchema.parse(req.body);
+ await transaction(db=>submitStoreApplication(db,req.user!.id,body));
+ res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
 }));
 const productSchema=z.object({name:required(180),description:z.string().trim().max(5000).default(''),category:z.enum(['Snacks','Oils','Spices','Grains']),origin:required(160),priceMinor:z.number().int().positive().max(100000000),stock:z.number().int().min(0).max(1000000),image:z.union([z.literal(''),z.url().refine(value=>value.startsWith('https://'),'Use an HTTPS image URL.')]).default(''),unit:required(80),tags:z.array(required(50)).max(10).default([]),active:z.boolean().default(true)}).strict();
 app.get('/api/seller/products',role('seller'),route(async(req,res)=>res.json({products:await products('p.seller_id=$1',[req.user!.id])})));

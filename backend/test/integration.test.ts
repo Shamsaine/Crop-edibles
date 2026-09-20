@@ -14,6 +14,7 @@ const { app }=await import('../src/app.js');
 let server:Server;
 let base='';
 const password='A-good-test-password-42';
+const vendorBusiness={businessName:'New pantry',legalEntityName:'New Pantry Limited',category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Independent pantry business.'};
 type Account={id:string;email:string;cookie:string};
 const realFetch=globalThis.fetch;
 const providerTransactions=new Map<string,{amount:number;currency:string;status:string;id:number}>();
@@ -55,7 +56,11 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    process.env.NODE_ENV='production';
    try {assert.equal(isAllowedOrigin('http://127.0.0.1:3000'),false);assert.equal(isAllowedOrigin('http://172.20.80.1:3000'),true);assert.equal(isAllowedOrigin('https://attacker.example'),false);}
    finally {if(previousMode===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousMode;}
-   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller'});
+   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',business:vendorBusiness});
+   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie};
+   assert.equal((await request('GET','/seller/application',undefined,accounts.pendingSeller)).body.application.status,'Pending');
+   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller'});assert.equal(incomplete.status,400);
+   assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['incomplete@example.test'])).rowCount,0,'Invalid signup must not leave an account behind');
    assert.equal(registered.status,201);assert.equal(registered.body.user.accountType,'seller');assert.equal(registered.body.user.role,'buyer');
    assert.equal((await request('GET','/seller/products',undefined,{id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie})).status,403);
    assert.equal((await request('POST','/auth/register',{name:'Bad role',email:'bad-role@example.test',password,accountType:'admin'})).status,400);
@@ -71,8 +76,10 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    assert.equal((await request('POST','/auth/google',{credential:'unverified'})).status,401);
    const fresh=await request('POST','/auth/google',{credential:'fresh',accountType:'seller'});assert.equal(fresh.status,200);assert.equal(fresh.body.user.accountType,'seller');assert.equal(fresh.body.user.role,'buyer');assert.equal(fresh.body.user.hasPassword,false);assert.equal(fresh.body.user.googleLinked,true);
    const googleUser={id:fresh.body.user.id,email:'google-new@example.test',cookie:fresh.cookie};
-   assert.equal((await request('PATCH','/account',{name:'My business name',phone:'+2348011111111'},googleUser)).status,200);
-   const again=await request('POST','/auth/google',{credential:'fresh'});assert.equal(again.body.user.id,googleUser.id);assert.equal(again.body.user.name,'My business name');assert.equal(again.body.user.accountType,'seller');
+   assert.equal((await request('GET','/seller/application',undefined,googleUser)).body.application,null,'Google seller signup does not submit a store');
+   const googleApplication=await request('POST','/seller/application',vendorBusiness,googleUser);assert.equal(googleApplication.status,201);assert.equal(googleApplication.body.application.status,'Pending');assert.match(googleApplication.body.application.registrationNumber,/^EDS-\d{6,}$/);
+   assert.equal((await request('PATCH','/account',{name:'My business name',phone:'+2348011111111',city:'Lagos',state:'Lagos',bio:'Google profile details'},googleUser)).status,200);
+   const again=await request('POST','/auth/google',{credential:'fresh'});assert.equal(again.body.user.id,googleUser.id);assert.equal(again.body.user.name,'My business name');assert.equal(again.body.user.bio,'Google profile details');assert.equal(again.body.user.city,'Lagos');assert.equal(again.body.user.accountType,'seller');
    assert.equal((await request('POST','/auth/login',{email:googleUser.email,password:'any-password'})).status,401);
    assert.equal((await request('POST','/account/password',{currentPassword:'',password:'another-password-123'},googleUser)).status,400);
    assert.equal((await request('POST','/auth/google',{credential:'existing'})).status,409,'Do not silently link an existing password account');
@@ -89,7 +96,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
  });
  await t.test('seller approval and product ownership',async()=>{
   for(const key of ['vendor','vendor2']){
-   const result=await request('POST','/seller/application',{businessName:key,legalEntityName:key+' Limited',registrationNumber:'CAC-'+key,category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Test application'},accounts[key]);assert.equal(result.status,201,JSON.stringify(result.body));
+   const result=await request('POST','/seller/application',{businessName:key,legalEntityName:key+' Limited',category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Test application'},accounts[key]);assert.equal(result.status,201,JSON.stringify(result.body));
    assert.equal((await request('PATCH',`/admin/applications/${result.body.application.id}`,{status:'Approved'},accounts.buyer)).status,403);
    assert.equal((await request('PATCH',`/admin/applications/${result.body.application.id}`,{status:'Approved'},accounts.admin)).status,200);
    assert.equal((await request('GET','/auth/me',undefined,accounts[key])).body.user.role,'seller');
@@ -371,7 +378,38 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    const migrated=(await client.query('SELECT * FROM disputes WHERE id=$1',[caseId])).rows[0];assert.equal(migrated.id,caseId);assert.equal(migrated.opened_by,buyer);assert.equal(migrated.subject,'Damaged: Legacy product');assert.equal(migrated.resolution,'Replacement delivered');assert.equal(migrated.status,'Resolved');assert.ok(Number(migrated.ticket_number)>=1001);
    assert.equal((await client.query('SELECT message FROM dispute_messages WHERE id=$1',[messageId])).rows[0].message,'Original customer message');
    const events=(await client.query('SELECT action,note,actor_id FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at',[caseId])).rows;assert.deepEqual(events.map(row=>row.action),['Opened','Resolved']);assert.equal(events[1].note,'Replacement delivered');assert.equal(events[1].actor_id,admin);
+   await client.query("INSERT INTO seller_applications(id,user_id,business_name,legal_entity_name,registration_number,category,location,phone) VALUES($1,$2,'Legacy store','Legacy legal name','CAC-OLD-001','Snacks','Lagos','08011111111')",[randomUUID(),seller]);
+   await client.query((await readFile(new URL('008_profiles_and_vendor_signup.sql',directory),'utf8')).replace(/^\uFEFF/,''));
+   const legacyStore=(await client.query('SELECT * FROM seller_applications WHERE user_id=$1',[seller])).rows[0];assert.equal(legacyStore.registration_number,'CAC-OLD-001');assert.ok(Number(legacyStore.registration_sequence)>=1001);
+   const legacyProfile=(await client.query('SELECT name,city,state,bio FROM users WHERE id=$1',[buyer])).rows[0];assert.equal(legacyProfile.name,'Legacy buyer');assert.equal(legacyProfile.bio,'');assert.equal(legacyProfile.city,'');
   } finally {await client.query('ROLLBACK');client.release();}
+ });
+ await t.test('editable profiles and seller signup approval preserve account and registration ownership',async()=>{
+  const profile=await request('PATCH','/account',{name:'Buyer Profile',phone:'+2348022222222',city:'Ibadan',state:'Oyo',bio:'I enjoy local food.'},accounts.buyer);assert.equal(profile.status,200,JSON.stringify(profile.body));assert.equal(profile.body.user.city,'Ibadan');assert.equal(profile.body.user.bio,'I enjoy local food.');
+  const partial=await request('PATCH','/account',{bio:'Updated bio.'},accounts.buyer);assert.equal(partial.body.user.name,'Buyer Profile');assert.equal(partial.body.user.city,'Ibadan');
+  assert.equal((await request('PATCH','/account',{role:'admin'},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{email:'changed@example.test'},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{bio:'x'.repeat(1001)},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{},accounts.buyer)).status,400);
+  const own=(await request('GET','/auth/me',undefined,accounts.buyer)).body.user;assert.equal(own.bio,'Updated bio.');assert.equal(own.state,'Oyo');
+  const stranger=(await request('GET','/auth/me',undefined,accounts.other)).body.user;assert.equal(stranger.bio,'');
+  const pending=accounts.pendingSeller;const application=(await request('GET','/seller/application',undefined,pending)).body.application;
+  assert.match(application.registrationNumber,/^EDS-\d{6,}$/);assert.equal(application.businessName,vendorBusiness.businessName);assert.equal(application.legacyRegistrationNumber,'');
+  assert.ok((await request('GET','/admin/applications',undefined,accounts.admin)).body.applications.some((a:any)=>a.id===application.id));
+  assert.equal((await request('POST','/seller/application',vendorBusiness,pending)).status,409);
+  assert.equal((await request('GET','/seller/products',undefined,pending)).status,403);
+  assert.equal((await request('PATCH','/admin/applications/'+application.id,{status:'Rejected',adminNotes:'Please clarify your location.'},accounts.admin)).status,200);
+  const rejected=(await request('GET','/seller/application',undefined,pending)).body.application;assert.equal(rejected.status,'Rejected');assert.equal(rejected.adminNotes,'Please clarify your location.');
+  assert.equal((await request('POST','/seller/application',{...vendorBusiness,registrationNumber:'FORGED'},pending)).status,400);
+  const resubmitted=await request('POST','/seller/application',{...vendorBusiness,location:'Ikeja, Lagos'},pending);assert.equal(resubmitted.status,201);assert.equal(resubmitted.body.application.registrationNumber,application.registrationNumber);assert.equal(resubmitted.body.application.id,application.id);assert.equal(resubmitted.body.application.status,'Pending');
+  assert.equal((await request('PATCH','/admin/applications/'+application.id,{status:'Approved'},accounts.admin)).status,200);
+  assert.equal((await request('GET','/auth/me',undefined,pending)).body.user.role,'seller');assert.equal((await request('GET','/seller/products',undefined,pending)).status,200);
+  assert.equal((await request('POST','/seller/application',vendorBusiness,pending)).status,409);
+  assert.equal((await request('POST','/seller/application',vendorBusiness,accounts.admin)).status,403);
+  const concurrent=await Promise.all([request('POST','/seller/application',{...vendorBusiness,businessName:'Buyer becoming seller'},accounts.other),request('POST','/seller/application',{...vendorBusiness,businessName:'Buyer becoming seller'},accounts.other)]);assert.deepEqual(concurrent.map(result=>result.status).sort(),[201,409]);
+  const otherApplication=(await request('GET','/seller/application',undefined,accounts.other)).body.application;assert.notEqual(otherApplication.registrationNumber,application.registrationNumber);
+  const applicant=(await request('GET','/auth/me',undefined,accounts.other)).body.user;assert.equal(applicant.role,'buyer');assert.equal(applicant.accountType,'seller');
+  assert.equal((await pool.query('SELECT count(*) FROM seller_applications WHERE user_id=$1',[accounts.other.id])).rows[0].count,'1');
  });
  await t.test('password changes invalidate other sessions and logout revokes cookie',async()=>{
   const second=await request('POST','/auth/login',{email:accounts.buyer.email,password});const otherSession={...accounts.buyer,cookie:second.cookie};
