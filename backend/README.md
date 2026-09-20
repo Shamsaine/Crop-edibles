@@ -76,9 +76,9 @@ All routes are under `/api`, use JSON, and return `{error: string, details?: [..
 | Method and path | Access / behavior |
 | --- | --- |
 | `GET /health`, `GET /config` | Database liveness and enabled payment options |
-| `POST /auth/register` | `{name,email,password}` → `{user}`; role is always buyer |
+| `POST /auth/register` | `{name,email,password,accountType?,business?}` → `{user}`; email seller signup requires business details, role remains buyer until approval |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | Sign in/out/current server user |
-| `PATCH /account` | `{name,phone}` updates own profile |
+| `PATCH /account` | Partial `{name,phone,city,state,bio}` updates own profile |
 | `POST /account/password` | `{currentPassword,password}`; invalidates all old sessions |
 | `GET /products?search=&category=` | Public active approved-seller catalog; omit absent query filters |
 | `GET /products/:id` | Active product detail |
@@ -103,7 +103,7 @@ All routes are under `/api`, use JSON, and return `{error: string, details?: [..
 | `GET /admin/payments`, `POST /admin/payments/:reference/verify` | Payment reconciliation visibility/manual reverify |
 | `GET /admin/disputes`, `PATCH /admin/disputes/:id` | Resolve with `{resolution}` |
 
-Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `state`, `postalCode`, `isDefault`. Seller application fields: `businessName`, `legalEntityName`, `registrationNumber`, `category`, `location`, `phone`, `description`. Product writes: `name`, `description`, `category`, `origin`, `priceMinor`, `stock`, `image` (HTTPS URL or empty), `unit`, `tags`, `active`. Categories are Snacks, Oils, Spices and Grains.
+Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `state`, `postalCode`, `isDefault`. Seller application fields: `businessName`, `legalEntityName`, `category`, `location`, `phone`, `description`. Product writes: `name`, `description`, `category`, `origin`, `priceMinor`, `stock`, `image` (HTTPS URL or empty), `unit`, `tags`, `active`. Categories are Snacks, Oils, Spices and Grains.
 
 ## Validation
 
@@ -148,3 +148,34 @@ Migration 006 adds featured placement and one scheduled promo/flash sale per pro
 Public priceMinor is the effective current price; basePriceMinor is the regular price. Responses include featured, saleKind, salePriceMinor, saleStartsAt, saleEndsAt, onSale and unitsSold. One shared SQL expression evaluates the sale window with database time in catalogue filtering/sorting, product detail, wishlist, basket and checkout. Promotions begin inclusively and end exclusively. Hidden/suspended/delisted products never appear in storefront collections.
 
 Checkout optionally accepts expectedSubtotalMinor. The frontend supplies its displayed subtotal; a changed price returns 409 before creating an order or reserving stock. The buyer reviews refreshed prices before retrying. Existing idempotent orders and their price snapshots are preserved.
+
+## Support ticket API
+
+Migration 007 extends the existing disputes tables in place. Every ticket has an immutable UUID, a unique sequential `TKT-xxxxxx` display reference and an explicit opened_by user. General tickets have no order link. The original order buyer remains separate from the creator, so sellers and admins can open order tickets without gaining creator ownership for the buyer. Existing case UUIDs, messages and resolutions are preserved; opening/resolution events are backfilled.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /tickets` | Authorized directory: `{tickets,total,page,limit,counts}`; conversation bodies load only on detail |
+| `POST /tickets` | `{subject,category?,priority?,orderItemId?,message,reason?}`; creates ticket, first message and opening event atomically |
+| `GET /tickets/:id` | `{ticket,permissions:{canClose,canManage}}`; full messages and status events |
+| `POST /tickets/:id/messages` | `{message}`; only authorized participants on Open tickets |
+| `PATCH /tickets/:id` | `{status,note?,resolution?,expectedStatus?}`; note required for Open/Closed, resolution required for Resolved |
+
+Categories: Order, Payment, Account, Store, Product, Other. Priorities: Low, Normal, High. Statuses: Open, Closed, Resolved. Query filters: search, status, category, priority, scope=mine/all, type=order/general, openerRole=buyer/seller/admin, from/to (inclusive UTC dates), sort=updated/newest/oldest/priority, page and limit (default 20, max 50). Counts are scoped to all conversations the caller may access; total reflects the current filters.
+
+Admins see/manage all tickets. General tickets are otherwise creator-only; order tickets also permit the order buyer and item seller to view/reply. Regular users can only transition their own tickets to Closed. Only admins can reopen or resolve. Session authorization is rechecked in each mutation transaction. Ticket row locks serialize replies/status changes; expectedStatus rejects stale changes with 409. Non-open tickets reject replies. Events preserve each closure/reopening/resolution, including actor, note and timestamp.
+
+Legacy /disputes and /admin/disputes routes remain compatible aliases. Legacy resolution-only PATCH requests infer Resolved; new clients send status explicitly. API records retain the legacy disputes/buyer_id column for the actual order buyer; opened_by is always the ownership authority.
+
+Integration tests cover ticket privacy, creator-only closure in both buyer/seller directions, administrative transitions, filters/pagination, concurrent transitions and migration of legacy case history in an isolated transaction.
+
+
+## Profiles and vendor registration
+
+Migration 008 adds optional profile city/state/bio and a unique generated registration sequence to store applications. Application responses expose registrationNumber as an Edible Shop reference such as EDS-001001. Earlier manually supplied registration_number values remain stored and are returned as legacyRegistrationNumber for administrator review. This reference is a marketplace identifier, not a government business-registration certificate.
+
+Email registration accepts `{name,email,password,accountType:"buyer"|"seller",business?}`. Buyers keep simple signup; business must be omitted. Sellers must include `{businessName,legalEntityName,category,location,phone,description?}`. Account creation, Pending application creation and session creation use one database transaction. A rejected/invalid signup cannot leave a partial account. All accounts retain buyer privileges; seller privileges begin only after admin approval.
+
+Google registration still accepts only `{credential,accountType?}` and never auto-submits a store application. Google users and existing buyers can later use POST /seller/application with the same business fields. The server supplies the application owner and registration reference. Pending/Approved duplicates are rejected; rejected applicants reuse their application ID and registration number when resubmitting. Submitting updates account_type to seller without promoting role. Previously supplied registrationNumber fields are no longer accepted in writes.
+
+PATCH /account accepts any nonempty subset of name, phone, city, state and bio. Omitted fields are preserved; role/email/owner changes are rejected. GET /auth/me and auth responses include the additional profile fields. Checkout addresses remain separate from profile location.

@@ -1,3 +1,4 @@
+import { storeRegistration } from './vendors.js';
 import { pool, type DB } from './db.js';
 import { activeSaleSql, sellingPriceSql, merchandisingJSON } from './merchandising.js';
 export const money=(minor:number|string)=>new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:2}).format(Number(minor)/100);
@@ -23,11 +24,6 @@ export async function orders(where:string,params:unknown[],db:DB=pool,sellerId?:
   return {id:row.id,createdAt:row.created_at,status:row.status,paymentMethod:row.payment_method,paymentStatus:row.payment_status,paymentReference:row.payment_reference,subtotalMinor,deliveryFeeMinor:sellerId?0:Number(row.delivery_fee_minor),totalMinor:sellerId?subtotalMinor:Number(row.total_minor),totalFormatted:money(sellerId?subtotalMinor:row.total_minor),address:row.address,items};
  });
 }
-export function applicationJSON(row:any){return {id:row.id,businessName:row.business_name,legalEntityName:row.legal_entity_name,registrationNumber:row.registration_number,category:row.category,location:row.location,phone:row.phone,description:row.description,logo:'',submittedDaysAgo:Math.floor((Date.now()-new Date(row.created_at).getTime())/86400000),status:row.status,adminNotes:row.admin_notes,contactPerson:{name:row.name,email:row.email,phone:row.phone,role:'Owner',avatar:''},documents:[],sampleInventory:[]};}
+export function applicationJSON(row:any){return {id:row.id,businessName:row.business_name,legalEntityName:row.legal_entity_name,registrationNumber:storeRegistration(row.registration_sequence),legacyRegistrationNumber:row.registration_number,category:row.category,location:row.location,phone:row.phone,description:row.description,logo:'',submittedDaysAgo:Math.floor((Date.now()-new Date(row.created_at).getTime())/86400000),status:row.status,adminNotes:row.admin_notes,contactPerson:{name:row.name,email:row.email,phone:row.phone,role:'Owner',avatar:''},documents:[],sampleInventory:[]};}
 export async function applications(where:string,params:unknown[],db:DB=pool){const {rows}=await db.query(`SELECT a.*,u.name,u.email FROM seller_applications a JOIN users u ON u.id=a.user_id WHERE ${where} ORDER BY a.created_at DESC`,params);return rows.map(applicationJSON);}
-export async function disputes(where:string,params:unknown[],db:DB=pool){
- const {rows}=await db.query(`SELECT d.*,i.order_id,i.product_name,i.product_image,i.seller_id,a.business_name,u.name customer_name FROM disputes d JOIN order_items i ON i.id=d.order_item_id JOIN seller_applications a ON a.user_id=i.seller_id JOIN users u ON u.id=d.buyer_id WHERE ${where} ORDER BY d.created_at DESC LIMIT 200`,params);
- if(!rows.length)return [];
- const messages=await db.query('SELECT m.*,u.name,u.role FROM dispute_messages m JOIN users u ON u.id=m.sender_id WHERE m.dispute_id=ANY($1::uuid[]) ORDER BY m.created_at,m.id',[rows.map(row=>row.id)]);
- return rows.map(row=>({id:row.id,orderId:row.order_id,orderItemId:row.order_item_id,productName:row.product_name,productImage:row.product_image,vendorName:row.business_name,customerName:row.customer_name,reason:row.reason,status:row.status,resolution:row.resolution,createdAt:row.created_at,messages:messages.rows.filter(message=>message.dispute_id===row.id).map(message=>({id:message.id,sender:message.role==='admin'?'system':message.sender_id===row.buyer_id?'customer':'vendor',senderName:message.name,message:message.message,createdAt:message.created_at}))}));
-}
+export { ticketDetails as disputes } from './ticket-views.js';

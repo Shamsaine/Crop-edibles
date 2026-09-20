@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readFile, readdir } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { randomUUID, createHmac } from 'node:crypto';
 import type { Server } from 'node:http';
@@ -13,6 +14,7 @@ const { app }=await import('../src/app.js');
 let server:Server;
 let base='';
 const password='A-good-test-password-42';
+const vendorBusiness={businessName:'New pantry',legalEntityName:'New Pantry Limited',category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Independent pantry business.'};
 type Account={id:string;email:string;cookie:string};
 const realFetch=globalThis.fetch;
 const providerTransactions=new Map<string,{amount:number;currency:string;status:string;id:number}>();
@@ -54,7 +56,11 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    process.env.NODE_ENV='production';
    try {assert.equal(isAllowedOrigin('http://127.0.0.1:3000'),false);assert.equal(isAllowedOrigin('http://172.20.80.1:3000'),true);assert.equal(isAllowedOrigin('https://attacker.example'),false);}
    finally {if(previousMode===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousMode;}
-   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller'});
+   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',business:vendorBusiness});
+   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie};
+   assert.equal((await request('GET','/seller/application',undefined,accounts.pendingSeller)).body.application.status,'Pending');
+   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller'});assert.equal(incomplete.status,400);
+   assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['incomplete@example.test'])).rowCount,0,'Invalid signup must not leave an account behind');
    assert.equal(registered.status,201);assert.equal(registered.body.user.accountType,'seller');assert.equal(registered.body.user.role,'buyer');
    assert.equal((await request('GET','/seller/products',undefined,{id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie})).status,403);
    assert.equal((await request('POST','/auth/register',{name:'Bad role',email:'bad-role@example.test',password,accountType:'admin'})).status,400);
@@ -70,8 +76,10 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    assert.equal((await request('POST','/auth/google',{credential:'unverified'})).status,401);
    const fresh=await request('POST','/auth/google',{credential:'fresh',accountType:'seller'});assert.equal(fresh.status,200);assert.equal(fresh.body.user.accountType,'seller');assert.equal(fresh.body.user.role,'buyer');assert.equal(fresh.body.user.hasPassword,false);assert.equal(fresh.body.user.googleLinked,true);
    const googleUser={id:fresh.body.user.id,email:'google-new@example.test',cookie:fresh.cookie};
-   assert.equal((await request('PATCH','/account',{name:'My business name',phone:'+2348011111111'},googleUser)).status,200);
-   const again=await request('POST','/auth/google',{credential:'fresh'});assert.equal(again.body.user.id,googleUser.id);assert.equal(again.body.user.name,'My business name');assert.equal(again.body.user.accountType,'seller');
+   assert.equal((await request('GET','/seller/application',undefined,googleUser)).body.application,null,'Google seller signup does not submit a store');
+   const googleApplication=await request('POST','/seller/application',vendorBusiness,googleUser);assert.equal(googleApplication.status,201);assert.equal(googleApplication.body.application.status,'Pending');assert.match(googleApplication.body.application.registrationNumber,/^EDS-\d{6,}$/);
+   assert.equal((await request('PATCH','/account',{name:'My business name',phone:'+2348011111111',city:'Lagos',state:'Lagos',bio:'Google profile details'},googleUser)).status,200);
+   const again=await request('POST','/auth/google',{credential:'fresh'});assert.equal(again.body.user.id,googleUser.id);assert.equal(again.body.user.name,'My business name');assert.equal(again.body.user.bio,'Google profile details');assert.equal(again.body.user.city,'Lagos');assert.equal(again.body.user.accountType,'seller');
    assert.equal((await request('POST','/auth/login',{email:googleUser.email,password:'any-password'})).status,401);
    assert.equal((await request('POST','/account/password',{currentPassword:'',password:'another-password-123'},googleUser)).status,400);
    assert.equal((await request('POST','/auth/google',{credential:'existing'})).status,409,'Do not silently link an existing password account');
@@ -88,7 +96,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
  });
  await t.test('seller approval and product ownership',async()=>{
   for(const key of ['vendor','vendor2']){
-   const result=await request('POST','/seller/application',{businessName:key,legalEntityName:key+' Limited',registrationNumber:'CAC-'+key,category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Test application'},accounts[key]);assert.equal(result.status,201,JSON.stringify(result.body));
+   const result=await request('POST','/seller/application',{businessName:key,legalEntityName:key+' Limited',category:'Snacks',location:'Lagos',phone:'+2348012345678',description:'Test application'},accounts[key]);assert.equal(result.status,201,JSON.stringify(result.body));
    assert.equal((await request('PATCH',`/admin/applications/${result.body.application.id}`,{status:'Approved'},accounts.buyer)).status,403);
    assert.equal((await request('PATCH',`/admin/applications/${result.body.application.id}`,{status:'Approved'},accounts.admin)).status,200);
    assert.equal((await request('GET','/auth/me',undefined,accounts[key])).body.user.role,'seller');
@@ -300,6 +308,108 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   assert.equal((await request('GET','/products/'+product1.id)).status,200);
   const overview=await request('GET','/admin/overview',undefined,accounts.admin);assert.equal(overview.status,200,JSON.stringify(overview.body));assert.equal(overview.body.trend.length,7);assert.ok(overview.body.activity.length>0);
   await request('DELETE','/cart/'+product1.id,undefined,accounts.buyer);
+ });
+ await t.test('ticket ownership, general enquiries, status history and directory filters',async()=>{
+  accounts.other.cookie=(await request('POST','/auth/login',{email:accounts.other.email,password})).cookie;
+  const open=await request('POST','/tickets',{subject:'Account help',category:'Account',priority:'High',message:'Please help with my profile.'},accounts.buyer);
+  assert.equal(open.status,201,JSON.stringify(open.body));const ticket=open.body.ticket;
+  assert.match(ticket.ticketNumber,/^TKT-\d{6,}$/);assert.equal(ticket.openedBy,accounts.buyer.id);assert.equal(ticket.events[0].action,'Opened');assert.equal(ticket.messages.length,1);
+  assert.equal((await request('POST','/tickets',{subject:'Anonymous',message:'Hi'})).status,401);
+  assert.equal((await request('POST','/tickets',{subject:'Spoof owner',message:'Hi',openedBy:accounts.admin.id},accounts.buyer)).status,400);
+  assert.equal((await request('GET','/tickets/'+ticket.id,undefined,accounts.other)).status,404);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Closed',note:'Not mine'},accounts.other)).status,404);
+  assert.equal((await request('POST','/tickets/'+ticket.id+'/messages',{message:'Not mine'},accounts.other)).status,404);
+  assert.equal((await request('GET','/tickets?search='+ticket.ticketNumber,undefined,accounts.other)).body.total,0);
+  const own=await request('GET','/tickets/'+ticket.id,undefined,accounts.buyer);assert.equal(own.body.permissions.canClose,true);assert.equal(own.body.permissions.canManage,false);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Resolved',resolution:'Not an admin'},accounts.buyer)).status,403);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Closed'},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Closed',expectedStatus:'Open',note:'I found the answer.'},accounts.buyer)).status,200);
+  assert.equal((await request('POST','/tickets/'+ticket.id+'/messages',{message:'After closure'},accounts.admin)).status,409);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Open',note:'Reopen myself'},accounts.buyer)).status,403);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Open',expectedStatus:'Closed',note:'Investigating further.'},accounts.admin)).status,200);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Closed',expectedStatus:'Closed',note:'Stale form'},accounts.buyer)).status,409);
+  assert.equal((await request('POST','/tickets/'+ticket.id+'/messages',{message:'Profile issue fixed.'},accounts.admin)).status,201);
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Resolved',resolution:'Updated the profile settings.'},accounts.admin)).status,200);
+  const closed=await request('PATCH','/tickets/'+ticket.id,{status:'Closed',note:'Confirmed, thank you.'},accounts.buyer);assert.equal(closed.status,200);assert.equal(closed.body.ticket.resolution,'Updated the profile settings.');
+  assert.equal((await request('PATCH','/tickets/'+ticket.id,{status:'Open',note:'Checking a related question.'},accounts.admin)).status,200);
+  const history=(await request('GET','/tickets/'+ticket.id,undefined,accounts.admin)).body.ticket;
+  assert.deepEqual(history.events.map((e:any)=>e.action),['Opened','Closed','Reopened','Resolved','Closed','Reopened']);assert.equal(history.messages.length,2);assert.equal(history.events.find((e:any)=>e.action==='Resolved').note,'Updated the profile settings.');
+  const second=await request('POST','/tickets',{subject:'Store enquiry',category:'Store',priority:'Low',message:'Store setup question.'},accounts.vendor2);assert.equal(second.status,201);
+  assert.equal((await request('GET','/tickets/'+second.body.ticket.id,undefined,accounts.buyer)).status,404);
+  const orderItem=order.items.find((item:any)=>item.sellerId===accounts.vendor2.id);
+  const vendorTicket=await request('POST','/tickets',{subject:'Delivery follow-up',category:'Order',orderItemId:orderItem.id,message:'Question for this buyer.'},accounts.vendor2);assert.equal(vendorTicket.status,201,JSON.stringify(vendorTicket.body));
+  const itemPath='/tickets/'+vendorTicket.body.ticket.id;
+  assert.equal((await request('GET',itemPath,undefined,accounts.buyer)).body.permissions.canClose,false);
+  assert.equal((await request('POST',itemPath+'/messages',{message:'Buyer can participate.'},accounts.buyer)).status,201);
+  assert.equal((await request('PATCH',itemPath,{status:'Closed',note:'Buyer did not open this.'},accounts.buyer)).status,403);
+  assert.equal((await request('POST','/tickets',{subject:'Wrong order',orderItemId:orderItem.id,message:'Unrelated customer'},accounts.other)).status,404);
+  assert.equal((await request('PATCH',itemPath,{status:'Closed',note:'My seller enquiry is complete.'},accounts.vendor2)).status,200);
+  const buyerTicket=await request('POST','/tickets',{subject:'Buyer follow-up',orderItemId:orderItem.id,message:'One more question.'},accounts.buyer);assert.equal(buyerTicket.status,201);
+  assert.equal((await request('PATCH','/tickets/'+buyerTicket.body.ticket.id,{status:'Closed',note:'Seller cannot close buyer ticket.'},accounts.vendor2)).status,403);
+  assert.equal((await request('PATCH','/tickets/'+buyerTicket.body.ticket.id,{status:'Closed',note:'Admin closed after review.'},accounts.admin)).status,200);
+  const adminTicket=await request('POST','/tickets',{subject:'Admin opened ticket',category:'Other',message:'Internal enquiry.'},accounts.admin);assert.equal(adminTicket.status,201);
+  const byRef=await request('GET','/tickets?search='+ticket.ticketNumber+'&status=Open&category=Account&priority=High&scope=mine&type=general',undefined,accounts.buyer);assert.equal(byRef.status,200,JSON.stringify(byRef.body));assert.equal(byRef.body.total,1);assert.equal(byRef.body.tickets[0].id,ticket.id);assert.equal(byRef.body.tickets[0].messages,undefined,'Directory does not load every conversation');
+  assert.equal((await request('GET','/tickets?search='+ticket.ticketNumber+'&status=Resolved',undefined,accounts.admin)).body.total,0);
+  const sellerList=await request('GET','/tickets?openerRole=seller&type=general&priority=Low',undefined,accounts.admin);assert.equal(sellerList.body.total,1);assert.equal(sellerList.body.tickets[0].id,second.body.ticket.id);
+  const today=new Date().toISOString().slice(0,10);assert.equal((await request('GET','/tickets?search='+ticket.ticketNumber+'&from='+today+'&to='+today,undefined,accounts.admin)).body.total,1);
+  assert.equal((await request('GET','/tickets?from=2026-10-02&to=2026-10-01',undefined,accounts.admin)).status,400);
+  assert.equal((await request('GET','/tickets?status=Invalid',undefined,accounts.admin)).status,400);
+  const p1=await request('GET','/tickets?limit=1&sort=newest',undefined,accounts.admin);const p2=await request('GET','/tickets?limit=1&sort=newest&page=2',undefined,accounts.admin);assert.ok(p1.body.total>1);assert.notEqual(p1.body.tickets[0].id,p2.body.tickets[0].id);
+  const high=await request('GET','/tickets?sort=priority',undefined,accounts.admin);assert.equal(high.body.tickets[0].priority,'High');
+  const parallel=await request('POST','/tickets',{subject:'Concurrent updates',message:'Check status serialization.'},accounts.buyer);const parallelPath='/tickets/'+parallel.body.ticket.id;
+  const results=await Promise.all([request('PATCH',parallelPath,{status:'Closed',expectedStatus:'Open',note:'Owner closing.'},accounts.buyer),request('PATCH',parallelPath,{status:'Resolved',expectedStatus:'Open',resolution:'Admin resolved.'},accounts.admin)]);assert.deepEqual(results.map(result=>result.status).sort(),[200,409]);
+  const final=(await request('GET',parallelPath,undefined,accounts.admin)).body.ticket;assert.equal(final.events.length,2,'Only the winning transition is recorded');
+ });
+ await t.test('ticket migration preserves legacy case IDs, comments and resolutions',async()=>{
+  const legacy=`edible_legacy_${randomUUID().replaceAll('-','')}`;assert.match(legacy,/^edible_legacy_[a-f0-9]{32}$/);
+  const client=await pool.connect();
+  try {
+   await client.query('BEGIN');await client.query(`CREATE SCHEMA ${legacy}`);await client.query(`SET LOCAL search_path TO ${legacy}`);
+   const directory=new URL('../migrations/',import.meta.url);
+   for(const name of (await readdir(directory)).filter(name=>name.endsWith('.sql')&&name<'007').sort())await client.query((await readFile(new URL(name,directory),'utf8')).replace(/^\uFEFF/,''));
+   const buyer=randomUUID(),seller=randomUUID(),admin=randomUUID(),product=randomUUID(),orderId=randomUUID(),item=randomUUID(),caseId=randomUUID(),messageId=randomUUID();
+   for(const [userId,email,role] of [[buyer,'legacy-buyer@example.test','buyer'],[seller,'legacy-seller@example.test','seller'],[admin,'legacy-admin@example.test','admin']])await client.query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,'Legacy '+role,'fixture-only',role]);
+   await client.query("INSERT INTO products(id,seller_id,name,category,origin,price_minor,stock) VALUES($1,$2,'Legacy product','Snacks','Lagos',10000,1)",[product,seller]);
+   await client.query("INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,total_minor,address) VALUES($1,$2,$3,'cod','Paid','Delivered',10000,10000,'{}')",[orderId,buyer,randomUUID()]);
+   await client.query("INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,'Legacy product','','pack',1,10000,10000,'Delivered')",[item,orderId,product,seller]);
+   await client.query("INSERT INTO disputes(id,order_item_id,buyer_id,reason,status,resolution,resolved_by,created_at,resolved_at) VALUES($1,$2,$3,'Damaged','Resolved','Replacement delivered',$4,'2025-01-01T09:00:00Z','2025-01-03T10:00:00Z')",[caseId,item,buyer,admin]);
+   await client.query("INSERT INTO dispute_messages(id,dispute_id,sender_id,message,created_at) VALUES($1,$2,$3,'Original customer message','2025-01-02T10:00:00Z')",[messageId,caseId,buyer]);
+   await client.query((await readFile(new URL('007_support_tickets.sql',directory),'utf8')).replace(/^\uFEFF/,''));
+   const migrated=(await client.query('SELECT * FROM disputes WHERE id=$1',[caseId])).rows[0];assert.equal(migrated.id,caseId);assert.equal(migrated.opened_by,buyer);assert.equal(migrated.subject,'Damaged: Legacy product');assert.equal(migrated.resolution,'Replacement delivered');assert.equal(migrated.status,'Resolved');assert.ok(Number(migrated.ticket_number)>=1001);
+   assert.equal((await client.query('SELECT message FROM dispute_messages WHERE id=$1',[messageId])).rows[0].message,'Original customer message');
+   const events=(await client.query('SELECT action,note,actor_id FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at',[caseId])).rows;assert.deepEqual(events.map(row=>row.action),['Opened','Resolved']);assert.equal(events[1].note,'Replacement delivered');assert.equal(events[1].actor_id,admin);
+   await client.query("INSERT INTO seller_applications(id,user_id,business_name,legal_entity_name,registration_number,category,location,phone) VALUES($1,$2,'Legacy store','Legacy legal name','CAC-OLD-001','Snacks','Lagos','08011111111')",[randomUUID(),seller]);
+   await client.query((await readFile(new URL('008_profiles_and_vendor_signup.sql',directory),'utf8')).replace(/^\uFEFF/,''));
+   const legacyStore=(await client.query('SELECT * FROM seller_applications WHERE user_id=$1',[seller])).rows[0];assert.equal(legacyStore.registration_number,'CAC-OLD-001');assert.ok(Number(legacyStore.registration_sequence)>=1001);
+   const legacyProfile=(await client.query('SELECT name,city,state,bio FROM users WHERE id=$1',[buyer])).rows[0];assert.equal(legacyProfile.name,'Legacy buyer');assert.equal(legacyProfile.bio,'');assert.equal(legacyProfile.city,'');
+  } finally {await client.query('ROLLBACK');client.release();}
+ });
+ await t.test('editable profiles and seller signup approval preserve account and registration ownership',async()=>{
+  const profile=await request('PATCH','/account',{name:'Buyer Profile',phone:'+2348022222222',city:'Ibadan',state:'Oyo',bio:'I enjoy local food.'},accounts.buyer);assert.equal(profile.status,200,JSON.stringify(profile.body));assert.equal(profile.body.user.city,'Ibadan');assert.equal(profile.body.user.bio,'I enjoy local food.');
+  const partial=await request('PATCH','/account',{bio:'Updated bio.'},accounts.buyer);assert.equal(partial.body.user.name,'Buyer Profile');assert.equal(partial.body.user.city,'Ibadan');
+  assert.equal((await request('PATCH','/account',{role:'admin'},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{email:'changed@example.test'},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{bio:'x'.repeat(1001)},accounts.buyer)).status,400);
+  assert.equal((await request('PATCH','/account',{},accounts.buyer)).status,400);
+  const own=(await request('GET','/auth/me',undefined,accounts.buyer)).body.user;assert.equal(own.bio,'Updated bio.');assert.equal(own.state,'Oyo');
+  const stranger=(await request('GET','/auth/me',undefined,accounts.other)).body.user;assert.equal(stranger.bio,'');
+  const pending=accounts.pendingSeller;const application=(await request('GET','/seller/application',undefined,pending)).body.application;
+  assert.match(application.registrationNumber,/^EDS-\d{6,}$/);assert.equal(application.businessName,vendorBusiness.businessName);assert.equal(application.legacyRegistrationNumber,'');
+  assert.ok((await request('GET','/admin/applications',undefined,accounts.admin)).body.applications.some((a:any)=>a.id===application.id));
+  assert.equal((await request('POST','/seller/application',vendorBusiness,pending)).status,409);
+  assert.equal((await request('GET','/seller/products',undefined,pending)).status,403);
+  assert.equal((await request('PATCH','/admin/applications/'+application.id,{status:'Rejected',adminNotes:'Please clarify your location.'},accounts.admin)).status,200);
+  const rejected=(await request('GET','/seller/application',undefined,pending)).body.application;assert.equal(rejected.status,'Rejected');assert.equal(rejected.adminNotes,'Please clarify your location.');
+  assert.equal((await request('POST','/seller/application',{...vendorBusiness,registrationNumber:'FORGED'},pending)).status,400);
+  const resubmitted=await request('POST','/seller/application',{...vendorBusiness,location:'Ikeja, Lagos'},pending);assert.equal(resubmitted.status,201);assert.equal(resubmitted.body.application.registrationNumber,application.registrationNumber);assert.equal(resubmitted.body.application.id,application.id);assert.equal(resubmitted.body.application.status,'Pending');
+  assert.equal((await request('PATCH','/admin/applications/'+application.id,{status:'Approved'},accounts.admin)).status,200);
+  assert.equal((await request('GET','/auth/me',undefined,pending)).body.user.role,'seller');assert.equal((await request('GET','/seller/products',undefined,pending)).status,200);
+  assert.equal((await request('POST','/seller/application',vendorBusiness,pending)).status,409);
+  assert.equal((await request('POST','/seller/application',vendorBusiness,accounts.admin)).status,403);
+  const concurrent=await Promise.all([request('POST','/seller/application',{...vendorBusiness,businessName:'Buyer becoming seller'},accounts.other),request('POST','/seller/application',{...vendorBusiness,businessName:'Buyer becoming seller'},accounts.other)]);assert.deepEqual(concurrent.map(result=>result.status).sort(),[201,409]);
+  const otherApplication=(await request('GET','/seller/application',undefined,accounts.other)).body.application;assert.notEqual(otherApplication.registrationNumber,application.registrationNumber);
+  const applicant=(await request('GET','/auth/me',undefined,accounts.other)).body.user;assert.equal(applicant.role,'buyer');assert.equal(applicant.accountType,'seller');
+  assert.equal((await pool.query('SELECT count(*) FROM seller_applications WHERE user_id=$1',[accounts.other.id])).rows[0].count,'1');
  });
  await t.test('password changes invalidate other sessions and logout revokes cookie',async()=>{
   const second=await request('POST','/auth/login',{email:accounts.buyer.email,password});const otherSession={...accounts.buyer,cookie:second.cookie};

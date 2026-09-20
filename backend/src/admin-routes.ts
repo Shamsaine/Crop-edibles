@@ -1,3 +1,4 @@
+import { storeRegistration } from './vendors.js';
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -25,11 +26,11 @@ function ageFilter(clauses:string[],params:unknown[],age:string|undefined,column
  if(!age)return;params.push(age==='older90'?90:Number(age));clauses.push(`${column} ${age==='older90'?'<':'>='} now()-($${params.length}::int * interval '1 day')`);
 }
 function add(clauses:string[],params:unknown[],sql:string,value:unknown){params.push(value);clauses.push(sql.replaceAll('?',`$${params.length}`));}
-function accountJSON(row:any){return {id:row.id,name:row.name,email:row.email,phone:row.phone,role:row.role,accountType:row.account_type,status:row.status,flagged:row.flagged,flagReason:row.flag_reason,statusReason:row.status_reason,createdAt:row.created_at,location:row.location||'',businessName:row.business_name||'',productsCount:Number(row.products_count||0),ordersCount:Number(row.orders_count||0),complaintsCount:Number(row.complaints_count||0),rating:Number(row.rating||0),registrationNumber:row.registration_number||'',description:row.description||''};}
+function accountJSON(row:any){return {id:row.id,name:row.name,email:row.email,phone:row.phone,role:row.role,accountType:row.account_type,status:row.status,flagged:row.flagged,flagReason:row.flag_reason,statusReason:row.status_reason,createdAt:row.created_at,location:row.location||'',businessName:row.business_name||'',productsCount:Number(row.products_count||0),ordersCount:Number(row.orders_count||0),complaintsCount:Number(row.complaints_count||0),rating:Number(row.rating||0),registrationNumber:row.registration_sequence?storeRegistration(row.registration_sequence):'',description:row.description||''};}
 const accountFrom=`FROM users u LEFT JOIN seller_applications a ON a.user_id=u.id
  LEFT JOIN LATERAL (SELECT city,state FROM addresses WHERE user_id=u.id ORDER BY is_default DESC,created_at LIMIT 1) addr ON true`;
-const location=`COALESCE(a.location,NULLIF(concat_ws(', ',addr.city,addr.state),''),'')`;
-const accountSelect=`SELECT u.id,u.name,u.email,u.phone,u.role,u.account_type,u.status,u.flagged,u.flag_reason,u.status_reason,u.created_at,a.business_name,a.registration_number,a.description,${location} location,
+const location=`COALESCE(a.location,NULLIF(concat_ws(', ',addr.city,addr.state),''),NULLIF(concat_ws(', ',NULLIF(u.city,''),NULLIF(u.state,'')),''),'')`;
+const accountSelect=`SELECT u.id,u.name,u.email,COALESCE(NULLIF(u.phone,''),a.phone,'') phone,u.role,u.account_type,u.status,u.flagged,u.flag_reason,u.status_reason,u.created_at,a.business_name,a.registration_number,a.registration_sequence,a.description,${location} location,
  (SELECT count(*) FROM products WHERE seller_id=u.id) products_count,
  (SELECT count(DISTINCT o.id) FROM orders o LEFT JOIN order_items i ON i.order_id=o.id WHERE o.buyer_id=u.id OR i.seller_id=u.id) orders_count,
  (SELECT count(*) FROM disputes d JOIN order_items i ON i.id=d.order_item_id WHERE i.seller_id=u.id) complaints_count,

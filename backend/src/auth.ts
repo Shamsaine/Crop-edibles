@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { z, ZodError } from 'zod';
 import { pool, config, type DB } from './db.js';
 const scrypt = promisify(scryptCallback);
-export type User = { id:string; name:string; email:string; phone:string; role:'buyer'|'seller'|'admin'; accountType:'buyer'|'seller'; hasPassword:boolean; googleLinked:boolean };
+export type User = { id:string; name:string; email:string; phone:string; city:string; state:string; bio:string; role:'buyer'|'seller'|'admin'; accountType:'buyer'|'seller'; hasPassword:boolean; googleLinked:boolean };
 declare global { namespace Express { interface Request { user?: User; } } }
 export class HttpError extends Error { constructor(public status:number, message:string) { super(message); } }
 export const route = (fn:(req:Request,res:Response)=>Promise<unknown>):RequestHandler => (req,res,next) => { Promise.resolve(fn(req,res)).catch(next); };
@@ -15,7 +15,7 @@ export const passwordSchema = z.string().min(10).max(128);
 export const emailSchema = z.string().trim().email().max(254).transform(value=>value.toLowerCase());
 export async function hashPassword(password:string) { const salt=randomBytes(16).toString('hex'); const hash=await scrypt(password,salt,64) as Buffer; return `${salt}:${hash.toString('hex')}`; }
 export async function verifyPassword(password:string, stored:string) { const [salt,encoded]=stored.split(':'); const expected=Buffer.from(encoded,'hex'); const actual=await scrypt(password,salt,64) as Buffer; return expected.length===actual.length && timingSafeEqual(actual,expected); }
-export function userJSON(row:any):User { return {id:row.id,name:row.name,email:row.email,phone:row.phone,role:row.role,accountType:row.account_type,hasPassword:!!row.password_hash,googleLinked:!!row.google_subject}; }
+export function userJSON(row:any):User { return {id:row.id,name:row.name,email:row.email,phone:row.phone,city:row.city,state:row.state,bio:row.bio,role:row.role,accountType:row.account_type,hasPassword:!!row.password_hash,googleLinked:!!row.google_subject}; }
 export function cookieToken(req:Request) { return req.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('edible_session='))?.slice(15); }
 export const tokenHash = (token:string) => createHash('sha256').update(token).digest('hex');
 export async function createSession(userId:string,res:Response,db:DB=pool) {

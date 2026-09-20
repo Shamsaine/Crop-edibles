@@ -1,4 +1,6 @@
 import express from 'express';
+import { businessSchema, submitStoreApplication } from './vendors.js';
+import { ticketsRouter, listTickets, changeTicket } from './tickets.js';
 import { catalogue } from './catalogue.js';
 import { sellingPriceSql } from './merchandising.js';
 import { adminRouter } from './admin-routes.js';
@@ -39,9 +41,12 @@ app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,pa
 app.use('/api',sessionMiddleware);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
- const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer')}).strict().parse(req.body);
+ const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
+ if(body.accountType==='seller'&&!body.business)throw new HttpError(400,'Complete your business information to register as a vendor.');
+ if(body.accountType==='buyer'&&body.business)throw new HttpError(400,'Buyer registration does not require business information. Apply for a store from your profile later.');
  const user=await transaction(async db=>{
   const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type) VALUES($1,$2,$3,$4,$5) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
+  if(body.business)await submitStoreApplication(db,rows[0].id,body.business);
   await createSession(rows[0].id,res,db);return userJSON(rows[0]);
  });res.status(201).json({user});
 }));
@@ -84,8 +89,11 @@ app.post('/api/account/google',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.post('/api/auth/logout',route(async(req,res)=>{const token=cookieToken(req);if(token)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(token)]);clearSession(res);res.json({ok:true});}));
 app.patch('/api/account',requireUser,route(async(req,res)=>{
- const body=z.object({name:required(120),phone:z.string().trim().max(30)}).strict().parse(req.body);
- const {rows}=await pool.query('UPDATE users SET name=$2,phone=$3 WHERE id=$1 RETURNING *',[req.user!.id,body.name,body.phone]);res.json({user:userJSON(rows[0])});
+ const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000)}).partial().strict().parse(req.body);
+ if(!Object.keys(body).length)throw new HttpError(400,'No profile changes provided.');
+ const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${key}=$${values.length}`;});
+ const {rows}=await pool.query(`UPDATE users SET ${assignments.join(',')} WHERE id=$1 AND status='active' RETURNING *`,values);
+ if(!rows[0])throw new HttpError(403,'Account access is unavailable.');res.json({user:userJSON(rows[0])});
 }));
 app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  const body=z.object({currentPassword:z.string().max(128),password:passwordSchema}).strict().parse(req.body);
@@ -189,18 +197,11 @@ app.post('/api/orders/:id/cancel',requireUser,route(async(req,res)=>{
  await releaseStock(db,orderId);await db.query("UPDATE orders SET status='Cancelled',payment_status='Cancelled',updated_at=now() WHERE id=$1",[orderId]);await db.query("UPDATE order_items SET status='Cancelled' WHERE order_id=$1",[orderId]);
  });res.json({order:(await orders('o.id=$1',[orderId]))[0]});
 }));
-const applicationSchema=z.object({businessName:required(160),legalEntityName:required(200),registrationNumber:required(80),category:z.enum(['Snacks','Oils','Spices','Grains']),location:required(200),phone:required(30),description:z.string().trim().max(3000).default('')}).strict();
 app.get('/api/seller/application',requireUser,route(async(req,res)=>res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]||null})));
 app.post('/api/seller/application',requireUser,route(async(req,res)=>{
- if(req.user!.role==='admin')throw new HttpError(403,'Administrators cannot apply as sellers.');
- const body=applicationSchema.parse(req.body);
- await transaction(async db=>{
- await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
- const {rows}=await db.query('SELECT * FROM seller_applications WHERE user_id=$1 FOR UPDATE',[req.user!.id]);
- if(rows[0]&&rows[0].status!=='Rejected')throw new HttpError(409,'You already have a pending or approved application.');
- const values=[rows[0]?.id||randomUUID(),req.user!.id,body.businessName,body.legalEntityName,body.registrationNumber,body.category,body.location,body.phone,body.description];
- await db.query("INSERT INTO seller_applications(id,user_id,business_name,legal_entity_name,registration_number,category,location,phone,description) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id) DO UPDATE SET business_name=$3,legal_entity_name=$4,registration_number=$5,category=$6,location=$7,phone=$8,description=$9,status='Pending',admin_notes='',reviewed_by=NULL,updated_at=now()",values);
- });res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
+ const body=businessSchema.parse(req.body);
+ await transaction(db=>submitStoreApplication(db,req.user!.id,body));
+ res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
 }));
 const productSchema=z.object({name:required(180),description:z.string().trim().max(5000).default(''),category:z.enum(['Snacks','Oils','Spices','Grains']),origin:required(160),priceMinor:z.number().int().positive().max(100000000),stock:z.number().int().min(0).max(1000000),image:z.union([z.literal(''),z.url().refine(value=>value.startsWith('https://'),'Use an HTTPS image URL.')]).default(''),unit:required(80),tags:z.array(required(50)).max(10).default([]),active:z.boolean().default(true)}).strict();
 app.get('/api/seller/products',role('seller'),route(async(req,res)=>res.json({products:await products('p.seller_id=$1',[req.user!.id])})));
@@ -249,24 +250,8 @@ app.patch('/api/seller/order-items/:id',role('seller'),route(async(req,res)=>{
 app.get('/api/seller/metrics',role('seller'),route(async(req,res)=>{
  const {rows}=await pool.query("SELECT (SELECT count(*) FROM products WHERE seller_id=$1 AND active)::int products_count,(SELECT count(*) FROM products WHERE seller_id=$1 AND active AND stock<10)::int low_stock_count,(SELECT count(DISTINCT order_id) FROM order_items WHERE seller_id=$1)::int orders_count,(SELECT count(DISTINCT order_id) FROM order_items WHERE seller_id=$1 AND status IN ('Confirmed','Processed','In Transit'))::int pending_orders_count,(SELECT COALESCE(sum(i.total_minor),0) FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.seller_id=$1 AND i.status='Delivered' AND (o.payment_status='Paid' OR (o.payment_method='cod' AND i.cod_collected_at IS NOT NULL))) revenue_minor",[req.user!.id]);const row=rows[0];res.json({metrics:{productsCount:row.products_count,lowStockCount:row.low_stock_count,ordersCount:row.orders_count,pendingOrdersCount:row.pending_orders_count,revenueMinor:Number(row.revenue_minor)}});
 }));
-const disputeAccess=(user:NonNullable<express.Request['user']>)=>user.role==='admin'?{where:'true',params:[] as unknown[]}:{where:'(d.buyer_id=$1 OR i.seller_id=$1)',params:[user.id] as unknown[]};
-app.get('/api/disputes',requireUser,route(async(req,res)=>{const access=disputeAccess(req.user!);res.json({disputes:await disputes(access.where,access.params)});}));
-app.get('/api/disputes/:id',requireUser,route(async(req,res)=>{const access=disputeAccess(req.user!);access.params.push(id(req.params.id));const dispute=(await disputes(`${access.where} AND d.id=$${access.params.length}`,access.params))[0];if(!dispute)throw new HttpError(404,'Support case not found.');res.json({dispute});}));
-app.post('/api/disputes',requireUser,route(async(req,res)=>{
- const body=z.object({orderItemId:z.string().uuid(),reason:z.enum(['Damaged','Not Delivered','Wrong Item','Other']),message:required(5000)}).strict().parse(req.body);const disputeId=randomUUID();
- await transaction(async db=>{
- const found=await db.query('SELECT i.id FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.id=$1 AND o.buyer_id=$2',[body.orderItemId,req.user!.id]);if(!found.rowCount)throw new HttpError(404,'Order item not found.');
- await db.query('INSERT INTO disputes(id,order_item_id,buyer_id,reason) VALUES($1,$2,$3,$4)',[disputeId,body.orderItemId,req.user!.id,body.reason]);await db.query('INSERT INTO dispute_messages(id,dispute_id,sender_id,message) VALUES($1,$2,$3,$4)',[randomUUID(),disputeId,req.user!.id,body.message]);
- });res.status(201).json({dispute:(await disputes('d.id=$1',[disputeId]))[0]});
-}));
-app.post('/api/disputes/:id/messages',requireUser,route(async(req,res)=>{
- const disputeId=id(req.params.id);const {message}=z.object({message:required(5000)}).strict().parse(req.body);const access=disputeAccess(req.user!);access.params.push(disputeId);
- await transaction(async db=>{
- const found=await db.query(`SELECT d.status FROM disputes d JOIN order_items i ON i.id=d.order_item_id WHERE ${access.where} AND d.id=$${access.params.length} FOR UPDATE OF d`,access.params);
- if(!found.rows[0])throw new HttpError(404,'Support case not found.');if(found.rows[0].status==='Resolved')throw new HttpError(409,'This support case is closed.');
- await db.query('INSERT INTO dispute_messages(id,dispute_id,sender_id,message) VALUES($1,$2,$3,$4)',[randomUUID(),disputeId,req.user!.id,message]);
- });res.status(201).json({dispute:(await disputes('d.id=$1',[disputeId]))[0]});
-}));
+app.use('/api/tickets',requireUser,ticketsRouter);
+app.use('/api/disputes',requireUser,ticketsRouter);
 app.get('/api/admin/applications',role('admin'),route(async(_req,res)=>res.json({applications:await applications('true',[])})));
 app.patch('/api/admin/applications/:id',role('admin'),route(async(req,res)=>{
  const applicationId=id(req.params.id);const body=z.object({status:z.enum(['Approved','Rejected']),adminNotes:z.string().trim().max(2000).default('')}).strict().parse(req.body);
@@ -281,14 +266,8 @@ app.patch('/api/admin/applications/:id',role('admin'),route(async(req,res)=>{
 app.get('/api/admin/orders',role('admin'),route(async(_req,res)=>res.json({orders:await orders('true',[])})));
 app.get('/api/admin/payments',role('admin'),route(async(_req,res)=>{const {rows}=await pool.query('SELECT p.id,p.order_id "orderId",p.reference,p.amount_minor::float8 "amountMinor",p.status,p.last_error "lastError",p.created_at "createdAt",p.checked_at "checkedAt" FROM payments p ORDER BY p.created_at DESC LIMIT 200');res.json({payments:rows});}));
 app.post('/api/admin/payments/:reference/verify',role('admin'),route(async(req,res)=>{const reference=required(100).parse(req.params.reference);const orderId=await verifyPayment(reference);if(!orderId)throw new HttpError(404,'Payment not found.');res.json({order:(await orders('o.id=$1',[orderId]))[0]});}));
-app.get('/api/admin/disputes',role('admin'),route(async(_req,res)=>res.json({disputes:await disputes('true',[])})));
-app.patch('/api/admin/disputes/:id',role('admin'),route(async(req,res)=>{
- const disputeId=id(req.params.id);const {resolution}=z.object({resolution:required(3000)}).strict().parse(req.body);
- await transaction(async db=>{
- const result=await db.query("UPDATE disputes SET status='Resolved',resolution=$2,resolved_by=$3,resolved_at=now() WHERE id=$1 AND status='Open'",[disputeId,resolution,req.user!.id]);if(!result.rowCount)throw new HttpError(409,'Support case not found or already resolved.');
- await db.query('INSERT INTO dispute_messages(id,dispute_id,sender_id,message) VALUES($1,$2,$3,$4)',[randomUUID(),disputeId,req.user!.id,`Case resolved: ${resolution}`]);
- });res.json({dispute:(await disputes('d.id=$1',[disputeId]))[0]});
-}));
+app.get('/api/admin/disputes',role('admin'),listTickets);
+app.patch('/api/admin/disputes/:id',role('admin'),changeTicket);
 app.get('/api/admin/metrics',role('admin'),route(async(_req,res)=>{
  const {rows}=await pool.query("SELECT (SELECT count(*) FROM users)::int users_count,(SELECT count(*) FROM users WHERE role='seller')::int sellers_count,(SELECT count(*) FROM products WHERE active)::int products_count,(SELECT count(*) FROM orders)::int orders_count,(SELECT COALESCE(sum(total_minor),0) FROM orders WHERE payment_status='Paid') revenue_minor,(SELECT count(*) FROM seller_applications WHERE status='Pending')::int pending_applications_count,(SELECT count(*) FROM disputes WHERE status='Open')::int open_disputes_count");const row=rows[0];res.json({metrics:{usersCount:row.users_count,sellersCount:row.sellers_count,productsCount:row.products_count,ordersCount:row.orders_count,revenueMinor:Number(row.revenue_minor),pendingApplicationsCount:row.pending_applications_count,openDisputesCount:row.open_disputes_count}});
 }));
