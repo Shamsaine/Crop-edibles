@@ -1,4 +1,5 @@
-import { ArrowUpRight, Facebook, Handshake, Instagram, Leaf, Mail, MessageCircle, Phone, Twitter, Youtube } from 'lucide-react';
+const brandLogo = '/crop-edibles-logo.png';
+import { ArrowUpRight, Facebook, Globe, Handshake, Instagram, Mail, MessageCircle, Phone, Twitter, Youtube } from 'lucide-react';
 import { siteContent } from '../siteContent';
 
 const socialPages = [
@@ -13,7 +14,7 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
   return <footer className="site-footer">
     <div className="footer-main">
       <div className="footer-intro">
-        <a href="#catalog" className="brand"><span className="brand-icon"><Leaf size={25} aria-hidden="true" /></span><span>Edible Shop<small>FROM HARVEST TO HOME</small></span></a>
+        <a href="#catalog" className="brand"><img className="brand-logo" src={brandLogo} alt="Crop Edibles logo" width={1280} height={1280} /><span>Edible Shop<small>taste the harvest</small></span></a>
         <p>Good food. Independent businesses.<br />A pantry with a story.</p>
         <p className="footer-description">Everyday essentials, connected to the people who grow, make, and bring them to your table.</p>
         <div className="footer-socials" aria-label="Edible Shop social media">
@@ -40,6 +41,7 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
         <p>Need a hand with an order, your store, or something else?</p>
         <a className="footer-contact-link" href={support + '/new'}><MessageCircle size={18} aria-hidden="true" /><span>Talk to our team<small>Open a support ticket</small></span><ArrowUpRight size={16} aria-hidden="true" /></a>
         {siteContent.email && <a className="footer-contact-detail" href={'mailto:' + siteContent.email}><Mail size={16} aria-hidden="true" />{siteContent.email}</a>}
+        <a className="footer-contact-detail" href={siteContent.website} target="_blank" rel="noopener noreferrer" aria-label="Visit www.cropedibles.com (opens in a new tab)"><Globe size={16} aria-hidden="true" />www.cropedibles.com<ArrowUpRight size={14} aria-hidden="true" /></a>
         {siteContent.phone && <a className="footer-contact-detail" href={'tel:' + siteContent.phone.replace(/[^+\d]/g, '')}><Phone size={16} aria-hidden="true" />{siteContent.phone}</a>}
       </section>
     </div>
@@ -48,6 +50,6 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
       {siteContent.partners.length > 0 && <div className="footer-partner-list">{siteContent.partners.map(partner => <a key={partner.name} href={partner.url} target="_blank" rel="noopener noreferrer">{partner.name}<ArrowUpRight size={14} aria-hidden="true" /></a>)}</div>}
       <a className="footer-partner-cta" href={support + '/new'}><Handshake size={21} aria-hidden="true" />Become a partner<ArrowUpRight size={17} aria-hidden="true" /></a>
     </section>
-    <div className="footer-bottom"><span>© {new Date().getFullYear()} Edible Shop. All rights reserved.</span><span>From harvest to home, with care.</span></div>
+    <div className="footer-bottom"><span>© {new Date().getFullYear()} Edible Shop. All rights reserved.</span><a href="https://www.alteturia.com" target="_blank" rel="noopener noreferrer" className="footer-developer" aria-label="Developed by Alteturia Studios (opens in a new tab)">Developed by Alteturia Studios</a></div>
   </footer>;
 }

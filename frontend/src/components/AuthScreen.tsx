@@ -1,5 +1,6 @@
+const brandLogo = '/crop-edibles-logo.png';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowLeft, Leaf, ShoppingBag, Store } from 'lucide-react';
+import { ArrowLeft, ShoppingBag, Store } from 'lucide-react';
 import { mutate, useAction } from '../api';
 import type { User } from '../types';
 import { Feedback } from './UI';
@@ -10,9 +11,9 @@ export function AuthLayout({ children, vendor = false }: { children: ReactNode; 
   return <div className="auth-layout">
     <aside className="auth-story" aria-label="Welcome to Edible Shop">
       <div className="auth-story-copy">
-        <a className="brand auth-brand" href="#catalog"><span className="auth-emblem"><Leaf strokeWidth={1} aria-hidden="true" /></span><span>Edible Shop<small>FROM HARVEST TO HOME</small></span></a>
+        <a className="brand auth-brand" href="#catalog"><img className="brand-logo" src={brandLogo} alt="Crop Edibles logo" width={1280} height={1280} /><span>Edible Shop<small>taste the harvest</small></span></a>
         <p className="eyebrow">A PANTRY WITH A STORY</p>
-        <h2>FROM HARVEST.<br />TO <br/>HOME.</h2>
+        <h2>Taste the<br />harvest.</h2>
         <p>{vendor ? 'Bring your business to Edible Shop. Create your account and submit your store for review in one step.' : 'Discover everyday essentials from independent food businesses. A place to find your favourites, and share what you make.'}</p>
         {vendor && <ol className="vendor-signup-steps"><li>Create your account</li><li>Submit your business details</li><li>Get approved and start selling</li></ol>}
       </div>

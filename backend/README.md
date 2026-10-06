@@ -179,3 +179,16 @@ Email registration accepts `{name,email,password,accountType:"buyer"|"seller",bu
 Google registration still accepts only `{credential,accountType?}` and never auto-submits a store application. Google users and existing buyers can later use POST /seller/application with the same business fields. The server supplies the application owner and registration reference. Pending/Approved duplicates are rejected; rejected applicants reuse their application ID and registration number when resubmitting. Submitting updates account_type to seller without promoting role. Previously supplied registrationNumber fields are no longer accepted in writes.
 
 PATCH /account accepts any nonempty subset of name, phone, city, state and bio. Omitted fields are preserved; role/email/owner changes are rejected. GET /auth/me and auth responses include the additional profile fields. Checkout addresses remain separate from profile location.
+
+## Photos, galleries, and biodata
+
+Migration 009 adds product `images`, optional account biodata, and `uploaded_images`.
+Images are stored as PostgreSQL bytea and included in database backups.
+
+- `POST /uploads/product` (approved seller) or `POST /uploads/profile` (any signed-in account): send raw JPEG, PNG, or WebP bytes with the matching Content-Type. Returns `{url}`. Maximum 5 MB, 25 megapixels, still images only. The server decodes, rotates, downsizes to 2048 pixels, strips metadata, and re-encodes to WebP. Storage quota: 100 MB per account.
+- `GET /images/:id`: serves validated WebP. Unattached images are visible only to their uploader; photos referenced by profiles, products, or order snapshots can be displayed publicly.
+- Product writes accept `images: string[]` (up to six). The first image is the cover and remains available as `image` for existing clients and order snapshots. Legacy `image` writes and HTTPS links remain supported. Local uploads must belong to the seller and have purpose product.
+- `POST /seller/products/batch`: `{products: [...]}`, one to twenty normal product payloads; validates all entries and saves all products in one transaction. Returns `{products}`. A failed entry leaves no products from that batch. The upload stage is separate, so successful photo uploads can be reused after correcting a product form.
+- `PATCH /account` additionally accepts `profileImage`, `dateOfBirth` (YYYY-MM-DD or empty), `gender`, `nationality`, and `occupation`. Dates must be valid and cannot be in the future. Biodata is optional; empty values clear fields. Profile uploads must belong to the account and have purpose profile. Profile data is returned only in the account's authenticated session/profile responses, never in the public catalog.
+
+Uploads retain the existing session and browser-origin protection. SVG and non-image payloads are rejected. Checkout, stock concurrency, pricing, moderation, and payment rules are unchanged.

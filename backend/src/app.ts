@@ -1,4 +1,6 @@
 import express from 'express';
+import { imagesRouter, checkImageOwnership } from './images.js';
+import { productSchema, imageFields, createProducts } from './product-write.js';
 import { businessSchema, submitStoreApplication } from './vendors.js';
 import { ticketsRouter, listTickets, changeTicket } from './tickets.js';
 import { catalogue } from './catalogue.js';
@@ -26,6 +28,8 @@ app.post('/api/payments/webhook',express.raw({type:'application/json',limit:'256
  if(event.event==='charge.success'&&event.data?.status==='success')await applyPayment(event.data);
  res.json({received:true});
 }));
+// A batch can contain twenty full descriptions and six image links per product.
+app.post('/api/seller/products/batch',express.json({limit:'512kb'}));
 app.use(express.json({limit:'100kb'}));
 app.use('/api',(req,_res,next)=>{
  if(['GET','HEAD','OPTIONS'].includes(req.method))return next();
@@ -33,12 +37,13 @@ app.use('/api',(req,_res,next)=>{
  // Non-browser clients may omit Origin; browsers cannot forge or suppress it on cross-origin JSON writes.
  if(origin!==undefined && !isAllowedOrigin(origin))return next(new HttpError(403,'This browser address is not allowed. Open '+config.appUrl+' or add your frontend origin to ALLOWED_ORIGINS and restart the API.'));
  if(req.headers['sec-fetch-site']==='cross-site')return next(new HttpError(403,'Cross-site requests are not allowed.'));
- if(req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
+ if(!/^\/uploads\/(product|profile)$/.test(req.path) && req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
  next();
 });
 app.get('/api/health',route(async(_req,res)=>{await pool.query('SELECT 1');res.json({status:'ok'});}));
 app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,payments:{cod:true,paystack:!!config.paystackKey},googleClientId:config.googleClientId}));
 app.use('/api',sessionMiddleware);
+app.use('/api',imagesRouter);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
  const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
@@ -89,9 +94,10 @@ app.post('/api/account/google',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.post('/api/auth/logout',route(async(req,res)=>{const token=cookieToken(req);if(token)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(token)]);clearSession(res);res.json({ok:true});}));
 app.patch('/api/account',requireUser,route(async(req,res)=>{
- const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000)}).partial().strict().parse(req.body);
+ const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000),profileImage:z.union([z.literal(''),z.string().regex(/^\/api\/images\/[0-9a-f-]{36}$/)]),dateOfBirth:z.union([z.literal(''),z.iso.date().refine(value=>value<=new Date().toISOString().slice(0,10),'Date of birth cannot be in the future.')]),gender:z.string().trim().max(60),nationality:z.string().trim().max(100),occupation:z.string().trim().max(120)}).partial().strict().parse(req.body);
+ if(body.profileImage)await checkImageOwnership([body.profileImage],req.user!.id,'profile');
  if(!Object.keys(body).length)throw new HttpError(400,'No profile changes provided.');
- const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${key}=$${values.length}`;});
+ const mapping:Record<string,string>={profileImage:"profile_image",dateOfBirth:"date_of_birth"}; const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${mapping[key]||key}=$${values.length}`;});
  const {rows}=await pool.query(`UPDATE users SET ${assignments.join(',')} WHERE id=$1 AND status='active' RETURNING *`,values);
  if(!rows[0])throw new HttpError(403,'Account access is unavailable.');res.json({user:userJSON(rows[0])});
 }));
@@ -203,17 +209,25 @@ app.post('/api/seller/application',requireUser,route(async(req,res)=>{
  await transaction(db=>submitStoreApplication(db,req.user!.id,body));
  res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
 }));
-const productSchema=z.object({name:required(180),description:z.string().trim().max(5000).default(''),category:z.enum(['Snacks','Oils','Spices','Grains']),origin:required(160),priceMinor:z.number().int().positive().max(100000000),stock:z.number().int().min(0).max(1000000),image:z.union([z.literal(''),z.url().refine(value=>value.startsWith('https://'),'Use an HTTPS image URL.')]).default(''),unit:required(80),tags:z.array(required(50)).max(10).default([]),active:z.boolean().default(true)}).strict();
 app.get('/api/seller/products',role('seller'),route(async(req,res)=>res.json({products:await products('p.seller_id=$1',[req.user!.id])})));
+app.post('/api/seller/products/batch',role('seller'),route(async(req,res)=>{
+ const body=z.object({products:z.array(productSchema).min(1).max(20)}).strict().parse(req.body);
+ const ids=await transaction(db=>createProducts(db,req.user!.id,body.products));
+ res.status(201).json({products:await products('p.id=ANY($1::uuid[])',[ids])});
+}));
 app.post('/api/seller/products',role('seller'),route(async(req,res)=>{
- const body=productSchema.parse(req.body);const productId=randomUUID();
- await pool.query('INSERT INTO products(id,seller_id,name,description,category,origin,price_minor,stock,image,unit,tags,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',[productId,req.user!.id,body.name,body.description,body.category,body.origin,body.priceMinor,body.stock,body.image,body.unit,body.tags,body.active]);res.status(201).json({product:(await products('p.id=$1',[productId]))[0]});
+ const body=productSchema.parse(req.body);
+ const [productId]=await transaction(db=>createProducts(db,req.user!.id,[body]));
+ res.status(201).json({product:(await products('p.id=$1',[productId]))[0]});
 }));
 app.patch('/api/seller/products/:id',role('seller'),route(async(req,res)=>{
  const productId=id(req.params.id);const body=productSchema.partial().extend({expectedStock:z.number().int().nonnegative().optional()}).parse(req.body);
- const mapping:Record<string,string>={name:'name',description:'description',category:'category',origin:'origin',priceMinor:'price_minor',stock:'stock',image:'image',unit:'unit',tags:'tags',active:'active'};
+ const mapping:Record<string,string>={name:'name',description:'description',category:'category',origin:'origin',priceMinor:'price_minor',stock:'stock',image:'image',images:'images',unit:'unit',tags:'tags',active:'active'};
+ const imageChanges=imageFields({...(Object.hasOwn(req.body,'image')?{image:body.image}:{}),...(Object.hasOwn(req.body,'images')?{images:body.images}:{})});
+ await checkImageOwnership(imageChanges.images||[],req.user!.id,'product');
+ const changes={...body,...imageChanges};
  const params:unknown[]=[productId,req.user!.id];// Zod defaults are for creation; PATCH must update only explicitly supplied fields.
- const assignments=Object.entries(body).filter(([key])=>key!=='expectedStock'&&Object.hasOwn(req.body,key)).map(([key,value])=>{params.push(value);return `${mapping[key]}=$${params.length}`;});
+ const assignments=Object.entries(changes).filter(([key])=>key!=='expectedStock'&&(Object.hasOwn(req.body,key)||Object.hasOwn(imageChanges,key))).map(([key,value])=>{params.push(value);return `${mapping[key]}=$${params.length}`;});
  if(!assignments.length)throw new HttpError(400,'No changes provided.');
  let stockGuard='';
  if(body.expectedStock!==undefined){

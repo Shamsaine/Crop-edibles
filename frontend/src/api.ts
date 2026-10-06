@@ -20,6 +20,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 export function mutate<T>(path: string, method: string, body?: unknown): Promise<T> {
   return api<T>(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
+export async function uploadImage(file: File, purpose: 'product' | 'profile') {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('Choose a JPEG, PNG or WebP image.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Each image must be 5 MB or smaller.');
+  if (!file.size) throw new Error('This image file is empty.');
+  return api<{ url: string }>('/uploads/' + purpose, { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
+}
 export function useResource<T>(path: string | null, revision = 0) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');

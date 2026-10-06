@@ -45,6 +45,21 @@ The command never overwrites or promotes an existing account.
 See [backend setup and API reference](backend/README.md) for admin provisioning,
 endpoint payloads, and database details.
 
+## Product photos and account profiles
+
+Approved vendors can upload JPEG, PNG, or WebP files from **My store → Add product**.
+Each product supports up to six photos (5 MB per file); the first photo is the cover.
+Use **Make cover** to reorder photos, or **Add multiple products** to save up to twenty
+products together. Existing HTTPS image links remain supported.
+
+All account holders can use **Account → Edit profile** to upload or remove a profile
+picture and save optional date of birth, gender, nationality, occupation, phone,
+city, state, and bio. Biodata is not included in public product responses.
+
+Run `npm run db:migrate` before using these features on another database. Uploaded
+images are decoded, resized, stripped of metadata, and stored in PostgreSQL, so
+database backups also include photos. Storage is limited to 100 MB per account.
+
 ## Payments
 
 Pay on delivery is available without an external provider. Orders are not

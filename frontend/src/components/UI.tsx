@@ -5,7 +5,14 @@ export function Feedback({ error, success }: { error?: string; success?: string 
   useEffect(()=>setHiddenError(false),[error]);useEffect(()=>setHiddenSuccess(false),[success]);
   return <>{error&&!hiddenError&&<div className="notice error dismissible-notice" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={()=>setHiddenError(true)}>×</button></div>}{success&&!hiddenSuccess&&<div className="notice success dismissible-notice" role="status"><span>{success}</span><button type="button" aria-label="Dismiss notification" onClick={()=>setHiddenSuccess(true)}>×</button></div>}</>;
 }
-export function Loading() { return <p className="muted" role="status">Loading…</p>; }
+export function Loading() { return <p className="loading-state" role="status">Loading…</p>; }
+export function statusTone(status: string) {
+  const value = status.toLowerCase();
+  if (['approved', 'paid', 'delivered', 'published', 'completed', 'resolved', 'active', 'listed', 'success', 'successful'].includes(value)) return 'good';
+  if (['rejected', 'failed', 'cancelled', 'canceled', 'unavailable', 'suspended', 'banned', 'delisted', 'admin delisted'].includes(value)) return 'error';
+  if (/pending|awaiting|processing|unpaid|open|low stock|attention/.test(value)) return 'warning';
+  return 'info';
+}
 export function Empty({ children }: { children: ReactNode }) { return <div className="empty"><Leaf aria-hidden="true" size={30} /><p>{children}</p></div>; }
 export function SectionTitle({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
   return <div className="section-title"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h1>{title}</h1></div>{children}</div>;

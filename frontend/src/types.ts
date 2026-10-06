@@ -1,10 +1,10 @@
 export type UserRole = 'buyer' | 'seller' | 'admin';
-export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
+export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; profileImage: string; dateOfBirth: string; gender: string; nationality: string; occupation: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
 export const CATEGORIES = ['Snacks', 'Oils', 'Spices', 'Grains'] as const;
 export interface Product {
   id: string; sellerId: string; name: string; description: string; category: typeof CATEGORIES[number];
   featured: boolean; basePriceMinor: number; saleKind: 'promo' | 'flash' | null; salePriceMinor: number | null; saleStartsAt: string | null; saleEndsAt: string | null; onSale: boolean; unitsSold: number;
-  origin: string; priceMinor: number; price: number; image: string; unit: string;
+  origin: string; priceMinor: number; price: number; image: string; images: string[]; unit: string;
   rating: number; reviewsCount: number; tags: string[]; vendorName: string; stock: number; active: boolean; sellerActive: boolean; adminDelisted: boolean; flagged: boolean; moderationReason: string;
 }
 export interface CartItem { product: Product; quantity: number; selectedSize: string }
