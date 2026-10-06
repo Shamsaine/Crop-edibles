@@ -101,9 +101,12 @@ on the server and locks inventory within a database transaction.
 - .env: local secrets, ignored by Git; .env.example: safe configuration template.
 
 Production requires HTTPS, NODE_ENV=production for secure session cookies, an
-APP_URL matching the deployed browser origin, and a reverse proxy that serves
-the frontend build and forwards /api to the backend. Do not expose database
+APP_URL matching the deployed browser origin. Express serves the frontend build
+and /api from one origin after `npm run build`. Do not expose database
 credentials or the PostgreSQL port publicly.
+
+See [Render staging setup](STAGING.md) for the deployment Blueprint, environment
+variables, compiled migration commands, and staging checks.
 
 ## Administrator workspace
 

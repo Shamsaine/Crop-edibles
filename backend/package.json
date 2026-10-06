@@ -9,8 +9,11 @@
     "build": "tsc",
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:deploy": "node dist/migrate.js",
     "admin:create": "tsx src/admin.ts",
-    "test": "tsx --test test/integration.test.ts test/uploads.test.ts"
+    "admin:create:deploy": "node dist/admin.js",
+    "test": "tsx --test test/integration.test.ts test/uploads.test.ts",
+    "test:hosting": "tsx --test test/hosting.test.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

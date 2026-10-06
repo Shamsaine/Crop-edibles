@@ -1,6 +1,14 @@
 ﻿import { app } from './app.js';
 import { pool, config } from './db.js';
 import { reconcilePayments } from './payments.js';
+import { access } from 'node:fs/promises';
+import path from 'node:path';
+import { frontendDist, serveFrontend } from './frontend.js';
+if(process.env.NODE_ENV==='production') {
+  try { await access(path.join(frontendDist,'index.html')); }
+  catch { throw new Error('Frontend build missing. Run npm run build from the repository root before starting the production server.'); }
+}
+serveFrontend(app);
 await pool.query('SELECT 1 FROM schema_migrations LIMIT 1');
 const server=app.listen(config.port,'0.0.0.0',()=>console.log(`Edible Shop API listening on http://localhost:${config.port}`));
 const reconciliation=setInterval(()=>{reconcilePayments().catch(error=>console.error('Payment reconciliation failed:',error.message));},60000);
