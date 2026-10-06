@@ -1,5 +1,6 @@
+const brandLogo = '/crop-edibles-logo.png';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Leaf, ShoppingBag, RefreshCw } from 'lucide-react';
+import { ShoppingBag, RefreshCw } from 'lucide-react';
 import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
@@ -97,11 +98,11 @@ export default function App() {
       : <AuthScreen onSuccess={onAuthSuccess} notice={paymentReference ? 'Sign in to the account you used at checkout to verify your payment.' : undefined} />}
   </main>;
 
-  return <div className="site-shell">
+  return <div className={"site-shell role-" + (routeRoot === "admin" ? "admin" : routeRoot === "seller" ? "seller" : "buyer")}>
     <div className="site-chrome" ref={chromeRef}>
       <div className="top-strip">Good food. Independent businesses. A pantry with a story.</div>
       <header className="site-header">
-        <a className="brand" href="#catalog"><span className="brand-icon"><Leaf aria-hidden="true" size={26} /></span><span>Edible Shop<small>FROM HARVEST TO HOME</small></span></a>
+        <a className="brand" href="#catalog"><img className="brand-logo" src={brandLogo} alt="Crop Edibles logo" width={1280} height={1280} /><span>Edible Shop<small>taste the harvest</small></span></a>
         <nav className="main-nav" aria-label="Main navigation">
           <a href="#catalog" aria-current={page === 'catalog' ? 'page' : undefined}>Home</a>
           <a href="#pantry" aria-current={page.split('?')[0] === 'pantry' ? 'page' : undefined}>The pantry</a>

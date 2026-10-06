@@ -10,8 +10,8 @@ interface LogoProps {
 export default function Logo({
   className = '',
   size = 120,
-  textColor = 'text-primary',
-  leafColor = '#3a5930',
+  textColor = 'text-[var(--color-primary)]',
+  leafColor = 'var(--color-primary)',
 }: LogoProps) {
   return (
     <div 
