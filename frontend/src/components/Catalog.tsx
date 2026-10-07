@@ -1,0 +1,25 @@
+import ProductGallery from './ProductGallery';
+import { useState } from 'react';
+import { Heart, Plus } from 'lucide-react';
+import { type Product, type Review } from '../types';
+import { date, money, useResource } from '../api';
+import { Empty, Feedback, Loading, ProductImage } from './UI';
+
+export interface ShopActions { savedIds: string[]; busy: boolean; onAdd: (product: Product, quantity?: number) => void; onSave: (product: Product) => void }
+export function ProductGrid({ products, ...actions }: ShopActions & { products: Product[] }) {
+  if (!products.length) return <Empty>No products to show yet. Approved sellers can publish their first products from their store.</Empty>;
+  return <div className="product-grid">{products.map(product => <article className="product-card" key={product.id}>
+    <a className="product-photo" href={'#product/' + product.id}><ProductImage src={product.image} name={product.name} /></a>
+    <button className={'save-button ' + (actions.savedIds.includes(product.id) ? 'saved' : '')} aria-label={(actions.savedIds.includes(product.id) ? 'Unsave ' : 'Save ') + product.name} aria-pressed={actions.savedIds.includes(product.id)} disabled={actions.busy} onClick={() => actions.onSave(product)}><Heart size={19} /></button>
+    <div className="product-copy">{product.onSale && <span className="sale-badge">{product.saleKind === 'flash' ? 'Flash sale' : 'Promo'} · {Math.round((1-product.priceMinor/product.basePriceMinor)*100)}% off</span>}<p className="eyebrow">{product.category} {product.origin && ' · ' + product.origin}</p><a href={'#product/' + product.id}><h3>{product.name}</h3></a><p className="muted small">{product.vendorName}</p>{product.reviewsCount > 0 && <p className="small">★ {Number(product.rating).toFixed(1)} · {product.reviewsCount} reviews</p>}<div className="product-bottom"><div>{product.onSale && <del className="original-price">{money(product.basePriceMinor)}</del>}<strong>{money(product.priceMinor)}</strong><small className="muted"> / {product.unit}</small></div><button className="add-button" disabled={actions.busy || !product.active || product.stock < 1} aria-label={'Add ' + product.name + ' to basket'} onClick={() => actions.onAdd(product)}><Plus size={18} /></button></div>{product.onSale && product.saleEndsAt && <p className="sale-end small">Ends {date(product.saleEndsAt)}</p>}{product.stock < 1 && <small className="muted">Out of stock</small>}</div>
+  </article>)}</div>;
+}
+export function ProductDetail({ id, revision, ...actions }: ShopActions & { id: string; revision: number }) {
+  const product = useResource<{ product: Product }>('/products/' + id, revision);
+  const reviews = useResource<{ reviews: Review[] }>('/products/' + id + '/reviews', revision);
+  const [quantity, setQuantity] = useState(1);
+  if (product.loading) return <Loading />;
+  if (!product.data) return <Feedback error={product.error || 'Product unavailable.'} />;
+  const item = product.data.product;
+  return <><a href="#pantry" className="text-button">← Back to the pantry</a><div className="product-detail"><ProductGallery key={item.id} images={item.images?.length ? item.images : item.image ? [item.image] : []} name={item.name} /><div><p className="eyebrow">{item.category} · {item.origin}</p><h1>{item.name}</h1><p className="muted">Sold by {item.vendorName}</p><p className="detail-price">{item.onSale && <del className="original-price">{money(item.basePriceMinor)}</del>}{money(item.priceMinor)} <small>/ {item.unit}</small></p>{item.onSale && <p className="notice">{item.saleKind === 'flash' ? 'Flash sale' : 'Promo'} · Ends {date(item.saleEndsAt!)}. Final price is confirmed at checkout.</p>}<p className="preserve-lines">{item.description || 'The seller has not added a description yet.'}</p><div className="tag-list">{item.tags.map(tag => <span key={tag}>{tag}</span>)}</div><p className="small">{item.stock > 0 ? item.stock + ' available' : 'Out of stock'}</p><div className="action-row"><label>Quantity<input className="quantity" aria-label="Quantity" type="number" min={1} max={Math.min(item.stock, 99)} value={quantity} onChange={event => setQuantity(Number(event.target.value))} /></label><button className="button commercial" disabled={actions.busy || !item.active || quantity < 1 || !Number.isInteger(quantity) || quantity > Math.min(item.stock, 99)} onClick={() => actions.onAdd(item, quantity)}>Add to basket</button><button className="button secondary" disabled={actions.busy} onClick={() => actions.onSave(item)}>{actions.savedIds.includes(item.id) ? 'Unsave' : 'Save for later'}</button></div></div></div><section className="panel"><h2>Customer reviews</h2><Feedback error={reviews.error} />{reviews.loading ? <Loading /> : !reviews.data?.reviews.length ? <p className="muted">No reviews yet. Buyers can review this product after delivery.</p> : reviews.data.reviews.map(review => <article className="review" key={review.id}><strong>{review.name}</strong><p>{'★'.repeat(review.rating)} <span className="muted small">{date(review.createdAt)}</span></p><p>{review.comment}</p></article>)}</section></>;
+}

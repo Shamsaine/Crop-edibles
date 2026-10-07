@@ -1,8 +1,0 @@
-{
-  "name": "Remix: Edible Shop",
-  "description": "A high-fidelity farm-to-table marketplace for locally processed, 100% natural organic edibles across Nigeria. Features Buyer, Seller, and Admin administrative channels.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
