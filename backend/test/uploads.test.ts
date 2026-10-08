@@ -45,11 +45,11 @@ test('persistent photos, private biodata, and atomic vendor batch creation', { t
       assert.equal((await upload('profile', 'buyer', Buffer.from('not a picture'), 'image/png')).status, 400);
       assert.equal((await upload('profile', 'buyer', Buffer.alloc(5 * 1024 * 1024 + 1), 'image/png')).status, 413);
     });
-    await t.test('every account role can save and remove a profile photo and optional biodata', async () => {
+    await t.test('every account role can save a profile photo and required biodata', async () => {
       for (const key of ['buyer', 'vendor', 'admin']) {
         const image = await upload('profile', key); assert.equal(image.status, 201, JSON.stringify(image.body));
         assert.equal((await fetch(base.replace(/\/api$/, '') + image.body.url)).status, 404, 'Unattached uploads are private');
-        const profile = await json('PATCH', '/account', { profileImage: image.body.url, dateOfBirth: '1995-06-15', gender: 'Woman', nationality: 'Nigerian', occupation: 'Trader' }, key);
+        const profile = await json('PATCH', '/account', { profileImage: image.body.url, dateOfBirth: '1995-06-15', gender: 'Woman', location: 'Lagos, Nigeria', occupation: 'Trader' }, key);
         assert.equal(profile.status, 200, JSON.stringify(profile.body));
         const saved = (await json('GET', '/auth/me', undefined, key)).body.user;
         assert.equal(saved.profileImage, image.body.url); assert.equal(saved.dateOfBirth, '1995-06-15'); assert.equal(saved.occupation, 'Trader');
@@ -60,8 +60,31 @@ test('persistent photos, private biodata, and atomic vendor batch creation', { t
         assert.equal((await json('PATCH', '/account', { profileImage: image.body.url }, 'vendor2')).status, 400);
         assert.equal((await json('PATCH', '/account', { dateOfBirth: '2999-01-01' }, key)).status, 400);
         assert.equal((await json('PATCH', '/account', { dateOfBirth: '2025-02-30' }, key)).status, 400);
-        assert.equal((await json('PATCH', '/account', { profileImage: '', dateOfBirth: '', gender: '', nationality: '', occupation: '' }, key)).status, 200);
+        assert.equal(saved.location, 'Lagos, Nigeria');
+        for (const field of ['dateOfBirth','gender','location']) assert.equal((await json('PATCH', '/account', { [field]: '' }, key)).status, 400);
+        assert.equal((await json('PATCH', '/account', { profileImage: '', occupation: '' }, key)).status, 200);
       }
+    });
+    await t.test('store application photos reach admins and approved public profiles', async () => {
+      const image = await upload('store', 'buyer'); assert.equal(image.status, 201, JSON.stringify(image.body));
+      const business={businessName:'Picture store',legalEntityName:'Picture owner',category:'Snacks',location:'Lagos',phone:'08012345678',businessRegistrationNumber:'RC-123456',images:[image.body.url]};
+      assert.equal((await json('POST','/seller/application',{...business,images:[(await upload('store','vendor')).body.url]},'buyer')).status,400);
+      assert.equal((await json('POST','/seller/application',business,'buyer')).status,201);
+      const application=(await json('GET','/seller/application',undefined,'buyer')).body.application;
+      assert.equal(application.businessRegistrationNumber,'RC-123456');assert.deepEqual(application.images,[image.body.url]);
+      assert.equal((await fetch(base.replace(/\/api$/, '')+image.body.url)).status,404);
+      assert.equal((await fetch(base.replace(/\/api$/, '')+image.body.url,{headers:{Cookie:accounts.admin.cookie}})).status,200);
+      assert.equal((await json('GET','/stores/'+accounts.buyer.id)).status,404);
+      assert.equal((await json('PATCH','/admin/applications/'+application.id,{status:'Approved',adminNotes:'Reviewed'},'admin')).status,200);
+      const store=await json('GET','/stores/'+accounts.buyer.id);
+      assert.equal(store.status,200);assert.equal(store.body.store.businessRegistrationNumber,'RC-123456');assert.deepEqual(store.body.store.images,[image.body.url]);
+      assert.equal(store.body.store.phone,undefined);assert.equal(store.body.store.contactPerson,undefined);
+      assert.equal((await fetch(base.replace(/\/api$/, '')+image.body.url)).status,200);
+      await pool.query("UPDATE users SET status='suspended' WHERE id=$1",[accounts.buyer.id]);
+      assert.equal((await json('GET','/stores/'+accounts.buyer.id)).status,404);
+      assert.equal((await fetch(base.replace(/\/api$/, '')+image.body.url)).status,404);
+      await pool.query("UPDATE users SET status='active' WHERE id=$1",[accounts.buyer.id]);
+      await pool.query("UPDATE users SET role='buyer' WHERE id=$1",[accounts.buyer.id]);
     });
     await t.test('product galleries, ownership checks and backwards-compatible covers', async () => {
       const first = await upload('product', 'vendor'); const second = await upload('product', 'vendor');

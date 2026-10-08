@@ -753,3 +753,37 @@ input[type=file]::file-selector-button { background:var(--color-primary); color:
 .gallery-thumbnails button[aria-pressed=true] { border:3px solid var(--color-primary); background:var(--color-primary-soft); }
 .gallery-thumbnails img { width:100%; height:100%; object-fit:cover; border-radius:4px; }
 @media(max-width:430px) { .upload-previews { grid-template-columns:repeat(2,minmax(0,1fr)); } .batch-product { padding:20px 0; } }
+
+/* Compact filters, moving hero backgrounds and consistent pointer feedback. */
+.filter-dropdown { margin:16px 0 24px; min-width:0; }
+.search-toolbar { display:flex; align-items:end; gap:12px; max-width:640px; margin-top:20px; }
+.search-toolbar > label { flex:1; min-width:0; }
+.filter-dropdown > summary { display:flex; align-items:center; gap:9px; width:fit-content; padding:11px 17px; border:1px solid var(--color-border); border-radius:var(--radius-md); background:var(--color-surface); color:var(--color-primary); cursor:pointer; list-style:none; font-weight:600; }
+.filter-dropdown > summary::-webkit-details-marker { display:none; }
+.filter-dropdown > summary svg:last-child { transition:transform .2s ease; }
+.filter-dropdown[open] > summary svg:last-child { transform:rotate(180deg); }
+.filter-dropdown-content { margin-top:16px; animation:filter-reveal .2s ease; }
+.pantry-layout { grid-template-columns:minmax(0,1fr); gap:0; }
+.pantry-filter-panel .form-stack { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); align-items:end; }
+.hero { display:block; position:relative; isolation:isolate; min-height:440px; background:var(--color-surface-soft); }
+.hero-slides { position:absolute; inset:0; z-index:-2; }
+.hero-slides img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center; opacity:0; transition:opacity 1.3s ease; }
+.hero-slides img.active { opacity:1; }
+.hero::after { content:''; position:absolute; inset:0; z-index:-1; background:linear-gradient(90deg,rgba(255,250,240,.97),rgba(255,250,240,.84) 30%,rgba(255,250,240,.05) 68%); }
+.hero-copy { max-width:540px; padding-bottom:85px; }
+.hero-carousel-controls { position:absolute; bottom:20px; left:50px; display:flex; align-items:center; gap:8px; }
+.hero-carousel-controls button { min-width:36px; min-height:36px; border:1px solid var(--color-border); border-radius:24px; background:rgba(255,255,255,.85); color:var(--color-primary); padding:6px 12px; cursor:pointer; }
+.hero-carousel-controls button span { display:block; width:8px; height:8px; border-radius:50%; background:currentColor; opacity:.35; }
+.hero-carousel-controls button.active span { opacity:1; }
+.store-photos { display:flex; gap:14px; flex-wrap:wrap; margin:20px 0; }
+.store-photos img { width:180px; height:150px; object-fit:cover; border-radius:var(--radius-md); }
+.block { display:block; }
+.form-stack > fieldset { display:flex; flex-direction:column; gap:18px; border:0; padding:0; margin:0; min-width:0; }
+a,button,summary,input,select,textarea { transition:color .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
+a:hover,summary:hover { color:var(--color-primary); }
+.button:not(:disabled):hover,.add-button:not(:disabled):hover { transform:translateY(-2px); box-shadow:0 5px 14px rgba(11,62,41,.14); }
+.button:not(:disabled):active { transform:translateY(0); }
+.main-nav a:hover,.text-button:hover { background:var(--color-surface-soft); }
+@keyframes filter-reveal { from { opacity:0; transform:translateY(-5px); } to { opacity:1; transform:translateY(0); } }
+@media(max-width:760px) { .hero { min-height:440px; } .hero-slides img { object-position:65% center; } .hero::after { background:linear-gradient(90deg,rgba(255,250,240,.95),rgba(255,250,240,.74) 55%,rgba(255,250,240,.2)); } .hero-copy { max-width:100%; padding-bottom:85px; } .hero-carousel-controls { left:24px; } .pantry-filter-panel .form-stack { grid-template-columns:1fr; } }
+@media(prefers-reduced-motion:reduce) { a,button,summary,input,select,textarea,.hero-slides img,.filter-dropdown > summary svg:last-child { transition:none; } .filter-dropdown-content { animation:none; } .button:not(:disabled):hover { transform:none; } }

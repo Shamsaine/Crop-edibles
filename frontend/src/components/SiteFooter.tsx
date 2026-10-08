@@ -14,12 +14,12 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
   return <footer className="site-footer">
     <div className="footer-main">
       <div className="footer-intro">
-        <a href="#catalog" className="brand"><img className="brand-logo" src={brandLogo} alt="Crop Edibles logo" width={1280} height={1280} /><span>Edible Shop<small>taste the harvest</small></span></a>
+        <a href="#catalog" className="brand"><img className="brand-logo" src={brandLogo} alt="The Edible Shop logo" width={1280} height={1280} /><span>The Edible Shop<small>...taste the harvest</small></span></a>
         <p>Good food. Independent businesses.<br />A pantry with a story.</p>
         <p className="footer-description">Everyday essentials, connected to the people who grow, make, and bring them to your table.</p>
-        <div className="footer-socials" aria-label="Edible Shop social media">
+        <div className="footer-socials" aria-label="The Edible Shop social media">
           {socialPages.map(({ name, icon: Icon, url }) => url
-            ? <a key={name} href={url} target="_blank" rel="noopener noreferrer" aria-label={'Edible Shop on ' + name + ' (opens in a new tab)'}><Icon size={19} aria-hidden="true" /></a>
+            ? <a key={name} href={url} target="_blank" rel="noopener noreferrer" aria-label={'The Edible Shop on ' + name + ' (opens in a new tab)'}><Icon size={19} aria-hidden="true" /></a>
             : <span key={name} aria-label={name + ' — coming soon'} title={name + ' — coming soon'}><Icon size={19} aria-hidden="true" /></span>)}
         </div>
         {!socialPages.some(page => page.url) && <small className="footer-social-note">Our social pages are coming soon.</small>}
@@ -32,7 +32,7 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
         <a href="#pantry?collection=deals&sort=discount">Promos & flash sales</a>
       </nav>
       <nav className="footer-links" aria-label="Account and help">
-        <h2>Your Edible Shop</h2>
+        <h2>Your shop</h2>
         <a href="#account">My profile</a><a href="#orders">My orders</a><a href="#saved">Saved products</a>
         <a href="#account/store">Sell with us</a><a href={support}>Support tickets</a>
       </nav>
@@ -50,6 +50,6 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
       {siteContent.partners.length > 0 && <div className="footer-partner-list">{siteContent.partners.map(partner => <a key={partner.name} href={partner.url} target="_blank" rel="noopener noreferrer">{partner.name}<ArrowUpRight size={14} aria-hidden="true" /></a>)}</div>}
       <a className="footer-partner-cta" href={support + '/new'}><Handshake size={21} aria-hidden="true" />Become a partner<ArrowUpRight size={17} aria-hidden="true" /></a>
     </section>
-    <div className="footer-bottom"><span>© {new Date().getFullYear()} Edible Shop. All rights reserved.</span><a href="https://www.alteturia.com" target="_blank" rel="noopener noreferrer" className="footer-developer" aria-label="Developed by Alteturia Studios (opens in a new tab)">Developed by Alteturia Studios</a></div>
+    <div className="footer-bottom"><span>© {new Date().getFullYear()} The Edible Shop. All rights reserved.</span><a href="https://www.alteturia.com" target="_blank" rel="noopener noreferrer" className="footer-developer" aria-label="Developed by Alteturia Studios (opens in a new tab)">Developed by Alteturia Studios</a></div>
   </footer>;
 }

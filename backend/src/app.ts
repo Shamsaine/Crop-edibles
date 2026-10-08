@@ -37,7 +37,7 @@ app.use('/api',(req,_res,next)=>{
  // Non-browser clients may omit Origin; browsers cannot forge or suppress it on cross-origin JSON writes.
  if(origin!==undefined && !isAllowedOrigin(origin))return next(new HttpError(403,'This browser address is not allowed. Open '+config.appUrl+' or add your frontend origin to ALLOWED_ORIGINS and restart the API.'));
  if(req.headers['sec-fetch-site']==='cross-site')return next(new HttpError(403,'Cross-site requests are not allowed.'));
- if(!/^\/uploads\/(product|profile)$/.test(req.path) && req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
+ if(!/^\/uploads\/(product|profile|store)$/.test(req.path) && req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
  next();
 });
 app.get('/api/health',route(async(_req,res)=>{await pool.query('SELECT 1');res.json({status:'ok'});}));
@@ -94,7 +94,7 @@ app.post('/api/account/google',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.post('/api/auth/logout',route(async(req,res)=>{const token=cookieToken(req);if(token)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(token)]);clearSession(res);res.json({ok:true});}));
 app.patch('/api/account',requireUser,route(async(req,res)=>{
- const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000),profileImage:z.union([z.literal(''),z.string().regex(/^\/api\/images\/[0-9a-f-]{36}$/)]),dateOfBirth:z.union([z.literal(''),z.iso.date().refine(value=>value<=new Date().toISOString().slice(0,10),'Date of birth cannot be in the future.')]),gender:z.string().trim().max(60),nationality:z.string().trim().max(100),occupation:z.string().trim().max(120)}).partial().strict().parse(req.body);
+ const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000),profileImage:z.union([z.literal(''),z.string().regex(/^\/api\/images\/[0-9a-f-]{36}$/)]),dateOfBirth:z.iso.date().refine(value=>value<=new Date().toISOString().slice(0,10),'Date of birth cannot be in the future.'),gender:required(60),location:required(200),occupation:z.string().trim().max(120)}).partial().strict().parse(req.body);
  if(body.profileImage)await checkImageOwnership([body.profileImage],req.user!.id,'profile');
  if(!Object.keys(body).length)throw new HttpError(400,'No profile changes provided.');
  const mapping:Record<string,string>={profileImage:"profile_image",dateOfBirth:"date_of_birth"}; const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${mapping[key]||key}=$${values.length}`;});
@@ -110,6 +110,12 @@ app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  await db.query('UPDATE users SET password_hash=$2 WHERE id=$1',[req.user!.id,await hashPassword(body.password)]);
  await db.query('DELETE FROM sessions WHERE user_id=$1',[req.user!.id]);await createSession(req.user!.id,res,db);
  });res.json({ok:true});
+}));
+app.get('/api/stores/:id',route(async(req,res)=>{
+ const sellerId=id(req.params.id);
+ const {rows}=await pool.query("SELECT a.business_name,a.business_registration_number,a.category,a.location,a.description,a.images FROM seller_applications a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.status='Approved' AND u.status='active' AND u.role='seller'",[sellerId]);
+ if(!rows[0])throw new HttpError(404,'Store not found.');const row=rows[0];
+ res.json({store:{businessName:row.business_name,businessRegistrationNumber:row.business_registration_number,category:row.category,location:row.location,description:row.description,images:row.images},products:await products("p.seller_id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[sellerId])});
 }));
 app.get('/api/products',catalogue);
 app.get('/api/products/:id',route(async(req,res)=>{const product=(await products("p.id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[id(req.params.id)]))[0];if(!product)throw new HttpError(404,'Product not found.');res.json({product});}));
