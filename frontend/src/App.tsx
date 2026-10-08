@@ -6,6 +6,7 @@ import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
 import SiteFooter from './components/SiteFooter';
 import { ProductDetail, ProductGrid } from './components/Catalog';
+import StoreProfile from './components/StoreProfile';
 import Home, { Pantry } from './components/Home';
 import Account from './components/Account';
 import Cart from './components/Cart';
@@ -90,7 +91,7 @@ export default function App() {
     const destination = authenticatedPage ? page : returnPage;
     window.location.hash = signedIn.role === 'admin' ? 'admin' : signedIn.role === 'seller' ? 'seller' : signedIn.accountType === 'seller' && signedIn.hasPassword ? 'account/store' : signedIn.accountType === 'seller' || (!signedIn.hasPassword && !signedIn.phone) ? 'account' : destination === 'auth' ? 'catalog' : destination;
   };
-  const connectionError = <div className="panel"><h1>We could not connect to the shop.</h1><p>Please make sure the backend and database are running, then retry.</p><button className="button primary" onClick={refresh}>Retry connection</button></div>;
+  const connectionError = <div className="panel"><h1>Please try again</h1><p>Refresh to continue to your account.</p><button className="button primary" onClick={refresh}>Retry</button></div>;
 
   if (authPage) return <main className="auth-page">
     {sessionLoading ? <AuthLayout><div className="auth-panel"><Loading /></div></AuthLayout>
@@ -102,7 +103,7 @@ export default function App() {
     <div className="site-chrome" ref={chromeRef}>
       <div className="top-strip">Good food. Independent businesses. A pantry with a story.</div>
       <header className="site-header">
-        <a className="brand" href="#catalog"><img className="brand-logo" src={brandLogo} alt="Crop Edibles logo" width={1280} height={1280} /><span>Edible Shop<small>taste the harvest</small></span></a>
+        <a className="brand" href="#catalog"><img className="brand-logo" src={brandLogo} alt="The Edible Shop logo" width={1280} height={1280} /><span>The Edible Shop<small>...taste the harvest</small></span></a>
         <nav className="main-nav" aria-label="Main navigation">
           <a href="#catalog" aria-current={page === 'catalog' ? 'page' : undefined}>Home</a>
           <a href="#pantry" aria-current={page.split('?')[0] === 'pantry' ? 'page' : undefined}>The pantry</a>
@@ -123,6 +124,7 @@ export default function App() {
         {paymentReference && (user ? <PaymentReturn reference={paymentReference} onChange={refresh} onDone={finishPayment} /> : <p className="notice">Sign in to the account you used at checkout to verify your payment.</p>)}
         {page.startsWith('product/') ? <ProductDetail key={page} id={page.slice('product/'.length)} revision={revision} {...shopping} />
           : (page === 'pantry' || page.startsWith('pantry?')) ? <Pantry query={page.includes('?') ? page.slice(page.indexOf('?') + 1) : ''} revision={revision} {...shopping} />
+          : routeRoot === 'store' ? <StoreProfile id={page.split('/')[1]} revision={revision} {...shopping}/>
           : routeRoot === 'account' && user ? <Account user={user} revision={revision} onChange={refresh} />
           : page === 'basket' && user ? <Cart cart={cart.data} error={cart.error} loading={cart.loading} revision={revision} onChange={refresh} />
           : page === 'orders' && user ? <Orders revision={revision} onChange={refresh} />

@@ -7,7 +7,7 @@ import { HttpError, id, requireUser, route } from './auth.js';
 
 export const localImagePattern = /^\/api\/images\/[0-9a-f-]{36}$/;
 export const imageURL = z.union([z.literal(''), z.string().regex(localImagePattern), z.url().max(2000).refine(value => value.startsWith('https://'), 'Use an uploaded image or an HTTPS image URL.')]);
-export async function checkImageOwnership(urls: string[], userId: string, purpose: 'product' | 'profile', db: DB = pool) {
+export async function checkImageOwnership(urls: string[], userId: string, purpose: 'product' | 'profile' | 'store', db: DB = pool) {
   const ids = [...new Set(urls.filter(url => localImagePattern.test(url)).map(url => id(url.split('/').pop())))];
   if (!ids.length) return;
   const result = await db.query('SELECT id FROM uploaded_images WHERE id=ANY($1::uuid[]) AND owner_id=$2 AND purpose=$3', [ids, userId, purpose]);
@@ -16,7 +16,7 @@ export async function checkImageOwnership(urls: string[], userId: string, purpos
 
 export const imagesRouter = express.Router();
 imagesRouter.post('/uploads/:purpose', requireUser, (req, _res, next) => {
-  if (!['product', 'profile'].includes(req.params.purpose)) return next(new HttpError(404, 'Upload type not found.'));
+  if (!['product', 'profile', 'store'].includes(req.params.purpose)) return next(new HttpError(404, 'Upload type not found.'));
   if (req.params.purpose === 'product' && req.user!.role !== 'seller') return next(new HttpError(403, 'Only approved vendors can upload product images.'));
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(req.headers['content-type']?.split(';')[0] || '')) return next(new HttpError(415, 'Choose a JPEG, PNG or WebP image.'));
   next();
@@ -46,7 +46,8 @@ imagesRouter.get('/images/:id', route(async (req, res) => {
   const result = await pool.query(`SELECT data FROM uploaded_images WHERE id=$1 AND (
     owner_id=$2 OR EXISTS(SELECT 1 FROM users WHERE profile_image=$3)
     OR EXISTS(SELECT 1 FROM products WHERE image=$3 OR $3=ANY(images))
-    OR EXISTS(SELECT 1 FROM order_items WHERE product_image=$3))`, [imageId, req.user?.id || null, url]);
+    OR EXISTS(SELECT 1 FROM order_items WHERE product_image=$3)
+    OR EXISTS(SELECT 1 FROM seller_applications a JOIN users u ON u.id=a.user_id WHERE $3=ANY(a.images) AND (a.status='Approved' AND u.status='active' OR $4='admin')))`, [imageId, req.user?.id || null, url, req.user?.role || null]);
   if (!result.rowCount) throw new HttpError(404, 'Image not found.');
   res.setHeader('Content-Type', 'image/webp');
   res.setHeader('Content-Security-Policy', "default-src 'none'");
