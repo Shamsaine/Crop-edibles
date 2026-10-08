@@ -48,7 +48,7 @@ export default function SiteFooter({ admin = false }: { admin?: boolean }) {
     <section className="footer-partners" aria-labelledby="footer-partners-title">
       <div><p className="footer-eyebrow">GROWING TOGETHER</p><h2 id="footer-partners-title">Partners & sponsors</h2><p>Help independent food businesses reach more tables.</p></div>
       {siteContent.partners.length > 0 && <div className="footer-partner-list">{siteContent.partners.map(partner => <a key={partner.name} href={partner.url} target="_blank" rel="noopener noreferrer">{partner.name}<ArrowUpRight size={14} aria-hidden="true" /></a>)}</div>}
-      <a className="footer-partner-cta" href={support + '/new'}><Handshake size={21} aria-hidden="true" />Become a partner<ArrowUpRight size={17} aria-hidden="true" /></a>
+      <a className="footer-partner-cta" href={'mailto:' + siteContent.partnershipEmail}><Handshake size={21} aria-hidden="true" />Become a partner<ArrowUpRight size={17} aria-hidden="true" /></a>
     </section>
     <div className="footer-bottom"><span>© {new Date().getFullYear()} The Edible Shop. All rights reserved.</span><a href="https://www.alteturia.com" target="_blank" rel="noopener noreferrer" className="footer-developer" aria-label="Developed by Alteturia Studios (opens in a new tab)">Developed by Alteturia Studios</a></div>
   </footer>;
