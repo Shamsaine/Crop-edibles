@@ -1,6 +1,6 @@
 const brandLogo = '/crop-edibles-logo.png';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ShoppingBag, RefreshCw } from 'lucide-react';
+import { ShoppingBasket, UserRound, RefreshCw } from 'lucide-react';
 import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
@@ -72,6 +72,7 @@ export default function App() {
     setPaymentReference('');
   };
   const shopping = { onAdd: add, onSave: save, savedIds: wishlist.data?.productIds || [], busy: action.busy || Boolean(user && (cart.loading || wishlist.loading || !cart.data || !wishlist.data)) };
+  const basketCount = cart.data?.items.reduce((sum, item) => sum + item.quantity, 0) || 0;
   const routeRoot = page.split(/[/?]/)[0];
   const authenticatedPage = ['account','basket','orders','saved','seller','admin','support'].includes(routeRoot);
   const authPage = page === 'auth' || (authenticatedPage && !user);
@@ -114,7 +115,7 @@ export default function App() {
             {user.role === 'admin' && <a href="#admin" aria-current={routeRoot === 'admin' ? 'page' : undefined}>Administration</a>}
           </>}
         </nav>
-        <div className="header-actions">{user ? <><a href="#basket" className="basket-link"><ShoppingBag size={19} aria-hidden="true" />Basket ({cart.data?.items.reduce((sum, item) => sum + item.quantity, 0) || 0})</a><a className="text-button account-link" href="#account" title={user.email}>{user.name.split(' ')[0]}</a><button className="text-button" disabled={action.busy} onClick={logout}>Sign out</button></> : <button className="button primary" onClick={signIn}>Sign in</button>}</div>
+        <div className="header-actions">{user ? <><a href="#basket" className="basket-link header-basket" aria-label={`Basket, ${basketCount} items`} title={`Basket (${basketCount})`}><ShoppingBasket size={24} aria-hidden="true" /><span className="basket-count" aria-hidden="true">{basketCount}</span></a><a className="header-profile-link" href="#account" aria-label={`View ${user.name}'s profile`}>{user.profileImage ? <img src={user.profileImage} alt="" /> : <UserRound size={22} aria-hidden="true" />}<span className="profile-name-tooltip" aria-hidden="true">{user.name}</span></a><button className="text-button" disabled={action.busy} onClick={logout}>Sign out</button></> : <button className="button primary" onClick={signIn}>Sign in</button>}</div>
       </header>
     </div>
     <main className="main-content">
