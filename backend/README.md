@@ -1,4 +1,4 @@
-﻿# Edible Shop API
+# Edible Shop API
 
 Express + TypeScript + PostgreSQL backend. All application records are database backed. No demo products, customers, orders, payments, reviews, ratings, vendor applications or support conversations are inserted. Registration saves a buyer/seller account type; marketplace permissions remain buyer until seller approval; administrator accounts require the local provisioning command. Approved seller applications grant seller access.
 
@@ -24,7 +24,7 @@ npm run start --workspace=@edible-shop/backend
 npm run test --workspace=@edible-shop/backend
 ```
 
-The root `.env` supplies `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PORT`, `APP_URL`, and optional `PAYSTACK_SECRET_KEY`. `DATABASE_URL` overrides the individual database connection fields. `DATABASE_SSL=true` enables certificate-verified database TLS. The checked-in `.env.example` contains placeholders; keep real credentials in the ignored `.env`. Never prefix backend secrets with `VITE_`.
+The root `.env` supplies `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PORT`, `APP_URL`, and optional `SECRET_KEY`. `DATABASE_URL` overrides the individual database connection fields. `DATABASE_SSL=true` enables certificate-verified database TLS. The checked-in `.env.example` contains placeholders; keep real credentials in the ignored `.env`. Never prefix backend secrets with `VITE_`.
 
 ## Administrator provisioning
 
@@ -47,7 +47,7 @@ Versioned SQL migrations in `migrations/` apply transactionally under an advisor
 | `cart_items`, `wishlists` | Persistent account basket and saved products |
 | `orders` | Buyer, immutable delivery snapshot, checkout idempotency key and server-computed totals |
 | `order_items` | Immutable item/name/image/price snapshots, seller ownership, individual fulfillment and COD collection timestamp |
-| `payments` | Paystack reference, expected amount/currency, authorization URL and reconciliation status |
+| `payments` | Flutterwave reference, expected amount/currency, authorization URL and reconciliation status |
 | `reviews` | One verified delivered-purchase review per buyer/product |
 | `disputes`, `dispute_messages` | Buyer/vendor/admin support threads and administrator resolution notes |
 
@@ -59,15 +59,21 @@ COD orders are Unpaid at checkout. A seller must explicitly pass `paymentCollect
 
 ## Payment handling
 
-Without `PAYSTACK_SECRET_KEY`, `/api/config` reports Paystack unavailable and checkout accepts COD only. With a Paystack secret, hosted checkout is initialized server side, using the stored expected amount, currency and reference. Configure Paystack's webhook URL to `https://your-domain/api/payments/webhook`; callbacks return to `APP_URL/?paymentReference=...`.
+Without `SECRET_KEY`, `/api/config` reports Flutterwave unavailable and checkout accepts COD only. With a Flutterwave secret, hosted checkout is initialized server side, using the stored expected amount, currency and reference. Configure Flutterwave's webhook URL to `https://your-domain/api/payments/webhook`; callbacks return to `APP_URL/?paymentReference=...`.
 
-A callback never marks an order paid. The buyer requests server-side verification; signed `charge.success` webhooks are also accepted. Webhook signatures use HMAC SHA512 over the exact raw request bytes. Both settlement paths require the expected reference, amount, NGN currency and success state. Transaction locks make repeated or simultaneous callbacks/webhooks safe. Unpaid online orders cannot be fulfilled.
+A callback never marks an order paid. The buyer requests server-side verification. `charge.completed` webhooks authenticate with the dashboard secret hash (`verif-hash`), or an HMAC-SHA256/base64 `flutterwave-signature` over raw bytes. Set `FLUTTERWAVE_WEBHOOK_SECRET` to that dashboard hash. Notifications are re-verified through Flutterwave's transaction-ID endpoint before applying payment. Both settlement paths require the expected reference, amount in naira, NGN currency and `successful` state. Transaction locks and a unique provider transaction ID make repeated or simultaneous callbacks/webhooks safe. Unpaid online orders cannot be fulfilled.
 
-Online stock is reserved when the order is created. The background worker rechecks pending references older than five minutes, every minute, with a batch size of 20. Confirmed failed/abandoned/reversed pending transactions cancel the order and release inventory exactly once. An unavailable/unknown provider result retains stock and records an explanation; elapsed time alone never frees possibly paid inventory. A late successful payment after stock was released is recorded as **Needs Review**, without restoring or fulfilling unavailable stock. A verified reversal after payment also requires review. Administrators can view and reverify payments through the API.
+Online stock is reserved when the order is created. The background worker rechecks pending references older than five minutes, every minute, with a batch size of 20. Failed payment attempts stay retryable and retain stock; verified cancelled/reversed pending transactions cancel the order and release inventory exactly once. An unavailable/unknown provider result retains stock and records an explanation; elapsed time alone never frees possibly paid inventory. A late successful payment after stock was released is recorded as **Needs Review**, without restoring or fulfilling unavailable stock. A verified reversal after payment also requires review. Migration 011 marks pre-existing payment records as legacy and outstanding ones as Needs Review; these cannot be sent to Flutterwave for verification. Administrators can view and reverify new Flutterwave payments through the API.
 
-Operational limit: if Paystack creates a checkout but its response is lost before the authorization URL is stored, a repeated initialize request may be rejected by Paystack for using the same reference. The saved order/reference remains available for provider reconciliation; do not manually release inventory until the provider confirms a terminal failure. Automated refunds, settlement/payout accounting and uploaded CAC document storage are not implemented. Resolving a support case records a resolution only; it never pretends that money was refunded. Real gateway verification requires configured credentials and a publicly reachable webhook; integration tests use a controlled provider stub.
+Operational limit: if Flutterwave creates a checkout but its response is lost before the authorization URL is stored, a repeated initialize request may be rejected by Flutterwave for using the same reference. The saved order/reference remains available for provider reconciliation; do not manually release inventory until the provider confirms a terminal failure. Automated refunds, settlement/payout accounting and uploaded CAC document storage are not implemented. Resolving a support case records a resolution only; it never pretends that money was refunded. Real gateway verification requires configured credentials and a publicly reachable webhook; integration tests use a controlled provider stub.
 
-Primary provider documentation: [initialize/verify transactions](https://paystack.com/docs/api/transaction/), [webhook signing and retries](https://paystack.com/docs/payments/webhooks/).
+Primary provider documentation: [hosted checkout](https://developer.flutterwave.com/docs/flutterwave-standard-1), [verification](https://developer.flutterwave.com/docs/transaction-verification), [webhook authentication and retries](https://developer.flutterwave.com/docs/webhooks).
+
+Flutterwave keys are `PUBLIC_KEY`, `SECRET_KEY`, `ENCRYPTION_KEY`. Hosted checkout only needs the secret key; public/encryption keys are read server-side for account configuration and are not used to collect card details locally.
+
+## Password recovery
+
+`POST /auth/forgot-password` accepts `{email}` and sends a single-use reset link through SMTP. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` and `EMAIL_FROM`. Reset links use `APP_URL/#auth/reset?token=...`, expire in 30 minutes and are stored as hashes. `POST /auth/reset-password` accepts `{token,password,confirmPassword}`, validates a matching password of 10–128 characters, replaces the salted password hash and revokes every session. Suspended, Google-only or unknown accounts cannot use this flow; eligible and ineligible requests receive the same acknowledgement. Resends invalidate earlier links and are limited to one per minute/five per hour per account, with the existing IP limiter as well. Normal password changes also invalidate reset links.
 
 ## API
 
@@ -87,11 +93,11 @@ All routes are under `/api`, use JSON, and return `{error: string, details?: [..
 | `GET /wishlist`, `PUT /wishlist/:productId` | Read / set `{saved:boolean}` |
 | `GET /addresses`, `POST /addresses`, `PATCH /addresses/:id`, `DELETE /addresses/:id` | Own address book; PATCH takes complete address form |
 | `GET /orders`, `GET /orders/:id` | Own order history/detail |
-| `POST /orders` | `{addressId,paymentMethod:"cod" or "paystack",idempotencyKey}` → `{order,authorizationUrl?}` |
+| `POST /orders` | `{addressId,paymentMethod:"cod" or "flutterwave",idempotencyKey}` → `{order,authorizationUrl?}` |
 | `POST /orders/:id/cancel` | Own COD order before any seller starts processing |
-| `POST /orders/:id/payment` | Retry own pending Paystack checkout initialization |
-| `POST /payments/verify` | `{reference}` verifies own payment with Paystack |
-| `POST /payments/webhook` | Raw signed Paystack event; no user session required |
+| `POST /orders/:id/payment` | Retry own pending Flutterwave checkout initialization |
+| `POST /payments/verify` | `{reference}` verifies own payment with Flutterwave |
+| `POST /payments/webhook` | Raw signed Flutterwave event; no user session required |
 | `GET /seller/application`, `POST /seller/application` | Own application; rejected applicants may resubmit |
 | `GET /seller/products`, `POST /seller/products`, `PATCH /seller/products/:id`, `DELETE /seller/products/:id` | Approved sellers manage only their products; deletion archives |
 | `GET /seller/orders`, `PATCH /seller/order-items/:id` | Own order items; `{status,paymentCollected?}` |
@@ -107,7 +113,7 @@ Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `st
 
 ## Validation
 
-`npm test` creates a uniquely named `edible_test_<uuid>` PostgreSQL schema, applies migrations, runs HTTP integration tests on an ephemeral port and drops only that schema. It asserts the isolated search path before exercising account/session/RBAC checks, seller approval/ownership, baskets/addresses, idempotent multi-seller checkout, concurrent stock contention, explicit COD collection, reviews/support access, cancellation, signed Paystack events, replay handling, incorrect payment amounts/currencies, late success, provider outages and password-session invalidation. It never seeds or truncates production tables. The database role needs CREATE SCHEMA permission for tests.
+`npm test` creates a uniquely named `edible_test_<uuid>` PostgreSQL schema, applies migrations, runs HTTP integration tests on an ephemeral port and drops only that schema. It asserts the isolated search path before exercising account/session/RBAC checks, seller approval/ownership, baskets/addresses, idempotent multi-seller checkout, concurrent stock contention, explicit COD collection, reviews/support access, cancellation, signed Flutterwave events, replay handling, incorrect payment amounts/currencies, late success, provider outages and password-session invalidation. It never seeds or truncates production tables. The database role needs CREATE SCHEMA permission for tests.
 
 Production hardening still needs deployment-specific shared rate limiting, alerting, backups, email verification/password recovery, seller-document verification/storage and payment/refund operational procedures. The included authentication limiter is per process and does not replace an edge/shared limiter across multiple API instances.
 

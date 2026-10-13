@@ -65,19 +65,41 @@ database backups also include photos. Storage is limited to 100 MB per account.
 Pay on delivery is available without an external provider. Orders are not
 recorded as paid just because checkout succeeds.
 
-For Paystack, set PAYSTACK_SECRET_KEY in the root .env to your own test key first,
+For Flutterwave, set SECRET_KEY in the root .env to your own test key first,
 then restart the API. Keep this key on the server; it is never a VITE_ variable.
 Set APP_URL to the browser origin used for the app so callback URLs and origin
-checks match. The checkout redirects to Paystack's hosted payment page.
+checks match. The checkout redirects to Flutterwave's hosted payment page.
 
-For deployed use, configure your Paystack webhook URL as
+For deployed use, configure your Flutterwave webhook URL as
 https://YOUR_DOMAIN/api/payments/webhook. A local webhook needs a public HTTPS
 endpoint forwarded to the API. Returning to the app also triggers server-side
 verification; the return URL itself is not evidence of payment.
 
-The implementation uses [Paystack transaction verification](https://paystack.com/docs/payments/accept-payments/)
-and [signed webhook events](https://paystack.com/docs/payments/webhooks/).
+The implementation uses [Flutterwave hosted checkout](https://developer.flutterwave.com/docs/flutterwave-standard-1),
+[transaction verification](https://developer.flutterwave.com/docs/transaction-verification)
+and [authenticated webhook events](https://developer.flutterwave.com/docs/webhooks).
 Online checkout stays unavailable while the secret key is unset.
+Use `PUBLIC_KEY`, `SECRET_KEY` and `ENCRYPTION_KEY` for your Flutterwave v3
+credentials. Hosted checkout uses `SECRET_KEY`; public and encryption keys are
+not needed for this flow, and are never exposed by the API. Set
+`FLUTTERWAVE_WEBHOOK_SECRET` to the same secret hash configured in your dashboard.
+The webhook verifies both the signature and transaction details with Flutterwave.
+Amounts are stored in kobo and converted to naira only at the gateway boundary.
+Failed checkout attempts remain retryable; stock stays reserved. Verified terminal
+cancellations release stock once, and payments received after cancellation need
+manual review. Migration 011 preserves old payment records as legacy records;
+outstanding legacy payments need manual review, not verification via Flutterwave.
+
+## Password recovery
+
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` and
+`EMAIL_FROM` on the API service. Use TLS on port 465 (`SMTP_SECURE=true`) or
+STARTTLS on port 587 (`SMTP_SECURE=false`). For Gmail, use `smtp.gmail.com` and
+a Google app password. `EMAIL_FROM` must be permitted by your mail provider.
+Set `APP_URL` to the exact frontend origin so email links open the correct site.
+Reset links expire after 30 minutes, work once and invalidate all existing sessions.
+Unknown emails, Google-only accounts and throttled requests receive the same
+acknowledgement. No reset tokens are exposed in API responses or logs.
 
 ## Development and validation
 

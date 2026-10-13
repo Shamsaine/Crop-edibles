@@ -6,6 +6,7 @@ import { api, mutate, useAction } from '../api';
 import type { User } from '../types';
 import { Feedback } from './UI';
 import GoogleSignIn from './GoogleSignIn';
+import PasswordInput from './PasswordInput';
 import BusinessFields, { businessFromForm } from './BusinessFields';
 
 export function AuthLayout({ children, vendor = false }: { children: ReactNode; vendor?: boolean }) {
@@ -84,8 +85,8 @@ export default function AuthScreen({ onSuccess, notice }: { onSuccess: (user: Us
     <form onSubmit={submit} className="form-stack"><fieldset disabled={action.busy}>
       {register && <label>Full name<input name="name" autoComplete="name" readOnly={Boolean(createdUser)} required minLength={2} maxLength={120} /></label>}
       <label>Email address<input name="email" type="email" autoComplete="email" readOnly={Boolean(createdUser)} required maxLength={254} /></label>
-      <label>Password<input name="password" type="password" autoComplete={register ? 'new-password' : 'current-password'} required minLength={register ? 10 : 1} maxLength={128} onInput={event=>{const password=event.currentTarget;const confirm=password.form?.elements.namedItem('confirmPassword') as HTMLInputElement|null;if(confirm)confirm.setCustomValidity(confirm.value===password.value?'':'Passwords do not match.');}} /></label>
-      {register && <><small className="muted">Use at least 10 characters.</small><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" required minLength={10} maxLength={128} onInput={event=>{const field=event.currentTarget;const password=field.form?.elements.namedItem('password') as HTMLInputElement|null;field.setCustomValidity(field.value===password?.value?'':'Passwords do not match.');}}/></label></>}
+      <label>Password<PasswordInput name="password" autoComplete={register ? 'new-password' : 'current-password'} required minLength={register ? 10 : 1} maxLength={128} onInput={event=>{const password=event.currentTarget;const confirm=password.form?.elements.namedItem('confirmPassword') as HTMLInputElement|null;if(confirm)confirm.setCustomValidity(confirm.value===password.value?'':'Passwords do not match.');}} /></label>
+      {register && <><small className="muted">Use at least 10 characters.</small><label>Confirm password<PasswordInput name="confirmPassword" autoComplete="new-password" required minLength={10} maxLength={128} onInput={event=>{const field=event.currentTarget;const password=field.form?.elements.namedItem('password') as HTMLInputElement|null;field.setCustomValidity(field.value===password?.value?'':'Passwords do not match.');}}/></label></>}
       {vendorSignup && <fieldset className="signup-business-fields" disabled={action.busy}>
         <legend>Your business information</legend>
         <p className="muted small">Your account will be created immediately. Your store can publish products after an administrator approves this application.</p>
@@ -93,6 +94,7 @@ export default function AuthScreen({ onSuccess, notice }: { onSuccess: (user: Us
       </fieldset>}
       <button className="button primary" disabled={action.busy}>{action.busy ? 'Please wait…' : createdUser ? 'Submit store application' : vendorSignup ? 'Create account & submit store' : register ? 'Create buyer account' : 'Sign in'}</button>
     </fieldset></form>
+    {!register&&<a className="text-button" href="#auth/forgot">Forgot your password?</a>}
     <div className="auth-switch"><span>{register ? 'Already part of the community?' : 'New to The Edible Shop?'}</span><button className="text-button" onClick={() => { setRegister(!register); action.setError(''); }} disabled={action.busy||Boolean(createdUser)}>{register ? 'Sign in' : 'Create an account'}</button></div>
   </section></AuthLayout>;
 }

@@ -4,6 +4,7 @@ import { ShoppingBasket, UserRound, RefreshCw } from 'lucide-react';
 import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
+import PasswordRecovery from './components/PasswordRecovery';
 import SiteFooter from './components/SiteFooter';
 import { ProductDetail, ProductGrid } from './components/Catalog';
 import StoreProfile from './components/StoreProfile';
@@ -26,7 +27,7 @@ function PaymentReturn({ reference, onChange, onDone }: { reference: string; onC
     if (result.order.paymentStatus === 'Paid') { onDone(); window.location.hash = 'orders'; }
   }, 'Payment status refreshed.');
   useEffect(() => { if (!started.current) { started.current = true; verify(); } }, []);
-  return <section className="panel payment-return"><h2>Checking your payment</h2><Feedback error={action.error} success={action.success} /><p>{action.busy ? 'Confirming your transaction with Paystack…' : status ? 'Payment status: ' + status + '. View your orders for the latest details.' : 'Your payment has not been confirmed yet. You can safely retry verification.'}</p><div className="action-row"><button className="button primary" disabled={action.busy} onClick={verify}>Check payment again</button><button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders</button></div></section>;
+  return <section className="panel payment-return"><h2>Checking your payment</h2><Feedback error={action.error} success={action.success} /><p>{action.busy ? 'Confirming your transaction with Flutterwave…' : status ? 'Payment status: ' + status + '. View your orders for the latest details.' : 'Your payment has not been confirmed yet. You can safely retry verification.'}</p><div className="action-row"><button className="button primary" disabled={action.busy} onClick={verify}>Check payment again</button><button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders</button></div></section>;
 }
 
 export default function App() {
@@ -37,7 +38,7 @@ export default function App() {
   const [sessionRevision, setSessionRevision] = useState(0);
   const [page, setPage] = useState(window.location.hash.slice(1) || 'catalog');
   const [returnPage, setReturnPage] = useState('catalog');
-  const [paymentReference, setPaymentReference] = useState(new URL(window.location.href).searchParams.get('paymentReference') || '');
+  const [paymentReference, setPaymentReference] = useState(new URL(window.location.href).searchParams.get('paymentReference') || new URL(window.location.href).searchParams.get('tx_ref') || '');
   const refresh = useCallback(() => { setRevision(value => value + 1); setSessionRevision(value => value + 1); }, []);
   const action = useAction(refresh);
   const cart = useResource<CartData>(user ? '/cart' : null, revision);
@@ -67,7 +68,7 @@ export default function App() {
   const logout = () => void action.run(async () => { await mutate('/auth/logout', 'POST'); setUser(null); window.location.hash = 'catalog'; }, 'Signed out.');
   const finishPayment = () => {
     const url = new URL(window.location.href);
-    ['paymentReference', 'reference', 'trxref'].forEach(key => url.searchParams.delete(key));
+    ['paymentReference', 'tx_ref', 'transaction_id', 'status'].forEach(key => url.searchParams.delete(key));
     window.history.replaceState({}, '', url);
     setPaymentReference('');
   };
@@ -75,7 +76,7 @@ export default function App() {
   const basketCount = cart.data?.items.reduce((sum, item) => sum + item.quantity, 0) || 0;
   const routeRoot = page.split(/[/?]/)[0];
   const authenticatedPage = ['account','basket','orders','saved','seller','admin','support'].includes(routeRoot);
-  const authPage = page === 'auth' || (authenticatedPage && !user);
+  const authPage = routeRoot === 'auth' || (authenticatedPage && !user);
   const chromeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const chrome = chromeRef.current;
@@ -97,6 +98,8 @@ export default function App() {
   if (authPage) return <main className="auth-page">
     {sessionLoading ? <AuthLayout><div className="auth-panel"><Loading /></div></AuthLayout>
       : sessionError && !user ? <AuthLayout><div className="auth-panel"><Feedback error={sessionError} />{connectionError}</div></AuthLayout>
+      : page.startsWith('auth/reset') ? <AuthLayout><PasswordRecovery token={new URLSearchParams(page.split('?')[1]||'').get('token')||''} onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
+      : page === 'auth/forgot' ? <AuthLayout><PasswordRecovery onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : <AuthScreen onSuccess={onAuthSuccess} notice={paymentReference ? 'Sign in to the account you used at checkout to verify your payment.' : undefined} />}
   </main>;
 
@@ -119,7 +122,7 @@ export default function App() {
       </header>
     </div>
     <main className="main-content">
-      <div className="refresh-row"><button className="text-button" onClick={refresh} aria-label="Refresh account and marketplace"><RefreshCw size={14} />Refresh</button></div>
+      {routeRoot!=="admin"&&<div className="refresh-row"><button className="text-button" onClick={refresh} aria-label="Refresh account and marketplace"><RefreshCw size={14} />Refresh</button></div>}
       <Feedback error={sessionError || action.error || cart.error || wishlist.error} success={action.success} />
       {sessionLoading ? <Loading /> : sessionError && !user ? connectionError : <>
         {paymentReference && (user ? <PaymentReturn reference={paymentReference} onChange={refresh} onDone={finishPayment} /> : <p className="notice">Sign in to the account you used at checkout to verify your payment.</p>)}

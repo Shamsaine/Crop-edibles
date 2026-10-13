@@ -1,4 +1,4 @@
-﻿import dotenv from 'dotenv';
+import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
@@ -7,7 +7,16 @@ export const config = {
   port: Number(process.env.PORT || 4000),
   appUrl: (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
   secureCookie: process.env.NODE_ENV === 'production' || process.env.SESSION_COOKIE_SECURE === 'true',
-  paystackKey: process.env.PAYSTACK_SECRET_KEY || '',
+  flutterwavePublicKey: (process.env.PUBLIC_KEY || '').trim(),
+  flutterwaveSecretKey: (process.env.SECRET_KEY || '').trim(),
+  flutterwaveEncryptionKey: (process.env.ENCRYPTION_KEY || '').trim(),
+  flutterwaveWebhookSecret: (process.env.FLUTTERWAVE_WEBHOOK_SECRET || '').trim(),
+  smtpHost: (process.env.SMTP_HOST || '').trim(),
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPassword: process.env.SMTP_PASSWORD || '',
+  emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
   googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
 };
 const schema = process.env.DB_SCHEMA || 'public';
