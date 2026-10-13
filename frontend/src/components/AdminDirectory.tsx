@@ -1,3 +1,4 @@
+import PasswordInput from './PasswordInput';
 import FilterDropdown from './FilterDropdown';
 import { useState, type FormEvent } from 'react';
 import { date, mutate, useAction, useResource } from '../api';
@@ -7,7 +8,7 @@ import AdminProducts from './AdminProducts';
 function CreateAdmin({onChange,onClose}:{onChange:()=>void;onClose:()=>void}) {
  const action=useAction();const [created,setCreated]=useState(false);
  const submit=(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const form=new FormData(event.currentTarget);void action.run(async()=>{await mutate('/admin/admins','POST',Object.fromEntries(form));setCreated(true);onChange();});};
- return <AdminModal title="Create administrator" onClose={onClose}><Feedback error={action.error}/>{created?<div className="notice success" role="status">Administrator created. They can sign in with the email and password you assigned. Share the credentials privately.</div>:<><p className="muted">Administrators can manage accounts, listings, orders and payments.</p><form className="form-stack" onSubmit={submit}><label>Full name<input name="name" required maxLength={120} autoComplete="name"/></label><label>Email address<input name="email" type="email" required autoComplete="email"/></label><label>Initial password<input name="password" type="password" required minLength={10} maxLength={128} autoComplete="new-password"/></label><button className="button primary" disabled={action.busy}>{action.busy?'Creating…':'Create administrator'}</button></form></>}</AdminModal>;
+ return <AdminModal title="Create administrator" onClose={onClose}><Feedback error={action.error}/>{created?<div className="notice success" role="status">Administrator created. They can sign in with the email and password you assigned. Share the credentials privately.</div>:<><p className="muted">Administrators can manage accounts, listings, orders and payments.</p><form className="form-stack" onSubmit={submit}><label>Full name<input name="name" required maxLength={120} autoComplete="name"/></label><label>Email address<input name="email" type="email" required autoComplete="email"/></label><label>Initial password<PasswordInput name="password" required minLength={10} maxLength={128} autoComplete="new-password"/></label><button className="button primary" disabled={action.busy}>{action.busy?'Creating…':'Create administrator'}</button></form></>}</AdminModal>;
 }
 function ManageAccount({account,onChange,onClose}:{account:AdminAccount;onChange:()=>void;onClose:()=>void}) {
  const action=useAction();const [operation,setOperation]=useState(account.flagged?'unflag':'flag');

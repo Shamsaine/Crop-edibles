@@ -1,4 +1,5 @@
 import express from 'express';
+import { passwordRecoveryRouter } from './password-recovery.js';
 import { imagesRouter, checkImageOwnership } from './images.js';
 import { productSchema, imageFields, createProducts } from './product-write.js';
 import { businessSchema, submitStoreApplication } from './vendors.js';
@@ -13,19 +14,22 @@ import { z } from 'zod';
 import { pool, transaction, config } from './db.js';
 import { route, id, required, passwordSchema, emailSchema, HttpError, hashPassword, verifyPassword, userJSON, sessionMiddleware, requireUser, role, authLimit, createSession, cookieToken, tokenHash, clearSession, errors } from './auth.js';
 import { products, cart, addressJSON, orders, applications, disputes } from './views.js';
-import { initializePayment, verifyPayment, applyPayment, releaseStock } from './payments.js';
+import { initializePayment, verifyPayment, verifyWebhookPayment, releaseStock } from './payments.js';
 
 export const app=express();
 app.disable('x-powered-by');
 app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');next();});
 app.post('/api/payments/webhook',express.raw({type:'application/json',limit:'256kb'}),route(async(req,res)=>{
- if(!config.paystackKey)throw new HttpError(503,'Paystack is not configured.');
- const signature=req.headers['x-paystack-signature'];
- if(typeof signature!=='string' || !/^[a-f0-9]{128}$/i.test(signature) || !Buffer.isBuffer(req.body))throw new HttpError(401,'Invalid webhook signature.');
- const expected=createHmac('sha512',config.paystackKey).update(req.body).digest();
- if(!timingSafeEqual(expected,Buffer.from(signature,'hex')))throw new HttpError(401,'Invalid webhook signature.');
+ if(!config.flutterwaveWebhookSecret)throw new HttpError(503,'Flutterwave webhook authentication is not configured.');
+ if(!Buffer.isBuffer(req.body))throw new HttpError(401,'Invalid webhook signature.');
+ const signed=req.headers['flutterwave-signature'];
+ const signature=signed??req.headers['verif-hash'];
+ if(typeof signature!=='string')throw new HttpError(401,'Invalid webhook signature.');
+ const expected=signed!==undefined?createHmac('sha256',config.flutterwaveWebhookSecret).update(req.body).digest('base64'):config.flutterwaveWebhookSecret;
+ const actualBuffer=Buffer.from(signature);const expectedBuffer=Buffer.from(expected);
+ if(actualBuffer.length!==expectedBuffer.length||!timingSafeEqual(actualBuffer,expectedBuffer))throw new HttpError(401,'Invalid webhook signature.');
  let event:any;try{event=JSON.parse(req.body.toString('utf8'));}catch{throw new HttpError(400,'Invalid webhook JSON.');}
- if(event.event==='charge.success'&&event.data?.status==='success')await applyPayment(event.data);
+ if(event.event==='charge.completed')await verifyWebhookPayment(event.data?.id,event.data?.tx_ref);
  res.json({received:true});
 }));
 // A batch can contain twenty full descriptions and six image links per product.
@@ -41,9 +45,10 @@ app.use('/api',(req,_res,next)=>{
  next();
 });
 app.get('/api/health',route(async(_req,res)=>{await pool.query('SELECT 1');res.json({status:'ok'});}));
-app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,payments:{cod:true,paystack:!!config.paystackKey},googleClientId:config.googleClientId}));
+app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,payments:{cod:true,flutterwave:!!config.flutterwaveSecretKey},googleClientId:config.googleClientId}));
 app.use('/api',sessionMiddleware);
 app.use('/api',imagesRouter);
+app.use('/api',passwordRecoveryRouter);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
  const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
@@ -108,6 +113,7 @@ app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  if(!rows[0].password_hash)throw new HttpError(400,'This account signs in with Google. Manage your Google password in your Google account.');
  if(!await verifyPassword(body.currentPassword,rows[0].password_hash))throw new HttpError(400,'Current password is incorrect.');
  await db.query('UPDATE users SET password_hash=$2 WHERE id=$1',[req.user!.id,await hashPassword(body.password)]);
+  await db.query('UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[req.user!.id]);
  await db.query('DELETE FROM sessions WHERE user_id=$1',[req.user!.id]);await createSession(req.user!.id,res,db);
  });res.json({ok:true});
 }));
@@ -167,8 +173,8 @@ app.delete('/api/addresses/:id',requireUser,route(async(req,res)=>{const result=
 app.get('/api/orders',requireUser,route(async(req,res)=>{res.json({orders:await orders('o.buyer_id=$1',[req.user!.id])});}));
 app.get('/api/orders/:id',requireUser,route(async(req,res)=>{const order=(await orders('o.id=$1 AND o.buyer_id=$2',[id(req.params.id),req.user!.id]))[0];if(!order)throw new HttpError(404,'Order not found.');res.json({order});}));
 app.post('/api/orders',requireUser,route(async(req,res)=>{
- const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','paystack']),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
- if(body.paymentMethod==='paystack'&&!config.paystackKey)throw new HttpError(503,'Paystack is not configured. Choose pay on delivery.');
+ const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','flutterwave']),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
+ if(body.paymentMethod==='flutterwave'&&!config.flutterwaveSecretKey)throw new HttpError(503,'Flutterwave is not configured. Choose pay on delivery.');
  const orderId=await transaction(async db=>{
  // Serialize checkout with account suspension and cart changes.
  const buyer=await db.query('SELECT status FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
@@ -183,18 +189,18 @@ app.post('/api/orders',requireUser,route(async(req,res)=>{
  const subtotal=items.reduce((total,item)=>total+Number(item.selling_price_minor)*item.quantity,0);
  if(body.expectedSubtotalMinor!==undefined&&subtotal!==body.expectedSubtotalMinor)throw new HttpError(409,'A product price or promotion has changed. Review the refreshed basket total and place your order again.');
  if(subtotal>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
- if(body.paymentMethod==='paystack'&&subtotal<5000)throw new HttpError(400,'Paystack orders must total at least NGN 50.');
+ if(body.paymentMethod==='flutterwave'&&subtotal<5000)throw new HttpError(400,'Online orders must total at least NGN 50.');
  const newId=randomUUID();const status=body.paymentMethod==='cod'?'Confirmed':'Awaiting Payment';
  await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,total_minor,address) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,JSON.stringify(addressJSON(address.rows[0]))]);
  for(const item of items){await db.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1',[item.id,item.quantity]);await db.query('INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[randomUUID(),newId,item.id,item.seller_id,item.name,item.image,item.unit,item.quantity,item.selling_price_minor,Number(item.selling_price_minor)*item.quantity,status]);}
- if(body.paymentMethod==='paystack')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,subtotal]);
+ if(body.paymentMethod==='flutterwave')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,subtotal]);
  await db.query('DELETE FROM cart_items WHERE user_id=$1',[req.user!.id]);return newId;
  });
- if(body.paymentMethod==='paystack')res.status(201).json(await initializePayment(orderId,req.user!.email));
+ if(body.paymentMethod==='flutterwave')res.status(201).json(await initializePayment(orderId,req.user!.email));
  else res.status(201).json({order:(await orders('o.id=$1',[orderId]))[0]});
 }));
 app.post('/api/orders/:id/payment',requireUser,route(async(req,res)=>{
- const orderId=id(req.params.id);const found=await pool.query("SELECT 1 FROM orders WHERE id=$1 AND buyer_id=$2 AND payment_method='paystack'",[orderId,req.user!.id]);if(!found.rowCount)throw new HttpError(404,'Order not found.');res.json(await initializePayment(orderId,req.user!.email));
+ const orderId=id(req.params.id);const found=await pool.query("SELECT 1 FROM orders WHERE id=$1 AND buyer_id=$2 AND payment_method='flutterwave'",[orderId,req.user!.id]);if(!found.rowCount)throw new HttpError(404,'Order not found.');res.json(await initializePayment(orderId,req.user!.email));
 }));
 app.post('/api/payments/verify',requireUser,route(async(req,res)=>{
  const {reference}=z.object({reference:required(100)}).strict().parse(req.body);
@@ -256,7 +262,7 @@ app.patch('/api/seller/order-items/:id',role('seller'),route(async(req,res)=>{
  const initial=await db.query('SELECT order_id FROM order_items WHERE id=$1 AND seller_id=$2',[itemId,req.user!.id]);if(!initial.rows[0])throw new HttpError(404,'Order item not found.');
  const orderId=initial.rows[0].order_id;const parent=await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[orderId]);const order=parent.rows[0];
  const {rows}=await db.query('SELECT * FROM order_items WHERE id=$1 AND seller_id=$2 FOR UPDATE',[itemId,req.user!.id]);const item=rows[0];
- if(order.payment_method==='paystack'&&order.payment_status!=='Paid')throw new HttpError(409,'Online payment must be confirmed before fulfillment.');
+ if(order.payment_method==='flutterwave'&&order.payment_status!=='Paid')throw new HttpError(409,'Online payment must be confirmed before fulfillment.');
  if(item.status===status)return orderId;
  if(order.payment_method==='cod'&&status==='Delivered'&&paymentCollected!==true)throw new HttpError(400,'Confirm cash payment was collected before marking this pay-on-delivery item delivered.');
  const transitions:Record<string,string>={Confirmed:'Processed',Processed:'In Transit','In Transit':'Delivered'};
@@ -284,7 +290,7 @@ app.patch('/api/admin/applications/:id',role('admin'),route(async(req,res)=>{
  });res.json({application:(await applications('a.id=$1',[applicationId]))[0]});
 }));
 app.get('/api/admin/orders',role('admin'),route(async(_req,res)=>res.json({orders:await orders('true',[])})));
-app.get('/api/admin/payments',role('admin'),route(async(_req,res)=>{const {rows}=await pool.query('SELECT p.id,p.order_id "orderId",p.reference,p.amount_minor::float8 "amountMinor",p.status,p.last_error "lastError",p.created_at "createdAt",p.checked_at "checkedAt" FROM payments p ORDER BY p.created_at DESC LIMIT 200');res.json({payments:rows});}));
+app.get('/api/admin/payments',role('admin'),route(async(_req,res)=>{const {rows}=await pool.query('SELECT p.id,p.provider,p.order_id "orderId",p.reference,p.amount_minor::float8 "amountMinor",p.status,p.last_error "lastError",p.created_at "createdAt",p.checked_at "checkedAt" FROM payments p ORDER BY p.created_at DESC LIMIT 200');res.json({payments:rows});}));
 app.post('/api/admin/payments/:reference/verify',role('admin'),route(async(req,res)=>{const reference=required(100).parse(req.params.reference);const orderId=await verifyPayment(reference);if(!orderId)throw new HttpError(404,'Payment not found.');res.json({order:(await orders('o.id=$1',[orderId]))[0]});}));
 app.get('/api/admin/disputes',role('admin'),listTickets);
 app.patch('/api/admin/disputes/:id',role('admin'),changeTicket);
