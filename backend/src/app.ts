@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { pool, transaction, config } from './db.js';
 import { route, id, required, passwordSchema, emailSchema, HttpError, hashPassword, verifyPassword, userJSON, sessionMiddleware, requireUser, role, authLimit, createSession, cookieToken, tokenHash, clearSession, errors } from './auth.js';
 import { products, cart, addressJSON, orders, applications, disputes } from './views.js';
-import { initializePayment, verifyPayment, verifyWebhookPayment, releaseStock } from './payments.js';
+import { initializePayment, changePaymentMethod, verifyPayment, verifyWebhookPayment, releaseStock } from './payments.js';
 
 export const app=express();
 app.disable('x-powered-by');
@@ -206,10 +206,15 @@ app.post('/api/payments/verify',requireUser,route(async(req,res)=>{
  const {reference}=z.object({reference:required(100)}).strict().parse(req.body);
  const found=await pool.query('SELECT o.id FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.reference=$1 AND o.buyer_id=$2',[reference,req.user!.id]);if(!found.rows[0])throw new HttpError(404,'Payment not found.');await verifyPayment(reference);res.json({order:(await orders('o.id=$1',[found.rows[0].id]))[0]});
 }));
+app.patch('/api/orders/:id/payment-method',requireUser,route(async(req,res)=>{
+ z.object({paymentMethod:z.literal('cod')}).strict().parse(req.body);
+ res.json(await changePaymentMethod(id(req.params.id),req.user!.id));
+}));
 app.post('/api/orders/:id/cancel',requireUser,route(async(req,res)=>{
  const orderId=id(req.params.id);
  await transaction(async db=>{
  const {rows}=await db.query('SELECT * FROM orders WHERE id=$1 AND buyer_id=$2 FOR UPDATE',[orderId,req.user!.id]);const order=rows[0];if(!order)throw new HttpError(404,'Order not found.');if(order.status==='Cancelled')return;
+ if(order.payment_status==='Needs Review')throw new HttpError(409,'This payment needs review before cancellation. Contact support.');
  if(order.payment_method!=='cod')throw new HttpError(409,'Online payment orders must be verified before cancellation. Open a support case if assistance is needed.');
  const started=await db.query("SELECT 1 FROM order_items WHERE order_id=$1 AND status<>'Confirmed'",[orderId]);if(started.rowCount)throw new HttpError(409,'Fulfillment has started. Open a support case for this order.');
  await releaseStock(db,orderId);await db.query("UPDATE orders SET status='Cancelled',payment_status='Cancelled',updated_at=now() WHERE id=$1",[orderId]);await db.query("UPDATE order_items SET status='Cancelled' WHERE order_id=$1",[orderId]);
@@ -262,6 +267,7 @@ app.patch('/api/seller/order-items/:id',role('seller'),route(async(req,res)=>{
  const initial=await db.query('SELECT order_id FROM order_items WHERE id=$1 AND seller_id=$2',[itemId,req.user!.id]);if(!initial.rows[0])throw new HttpError(404,'Order item not found.');
  const orderId=initial.rows[0].order_id;const parent=await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[orderId]);const order=parent.rows[0];
  const {rows}=await db.query('SELECT * FROM order_items WHERE id=$1 AND seller_id=$2 FOR UPDATE',[itemId,req.user!.id]);const item=rows[0];
+ if(order.payment_status==='Needs Review')throw new HttpError(409,'Payment needs review before fulfillment or cash collection.');
  if(order.payment_method==='flutterwave'&&order.payment_status!=='Paid')throw new HttpError(409,'Online payment must be confirmed before fulfillment.');
  if(item.status===status)return orderId;
  if(order.payment_method==='cod'&&status==='Delivered'&&paymentCollected!==true)throw new HttpError(400,'Confirm cash payment was collected before marking this pay-on-delivery item delivered.');

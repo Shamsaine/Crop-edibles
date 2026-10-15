@@ -1,23 +1,26 @@
 const brandLogo = '/crop-edibles-logo.png';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ShoppingBasket, UserRound, RefreshCw } from 'lucide-react';
+import { ShoppingBasket, UserRound, RefreshCw, CreditCard, ArrowUpRight } from 'lucide-react';
 import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
 import PasswordRecovery from './components/PasswordRecovery';
 import SiteFooter from './components/SiteFooter';
+import { siteContent } from './siteContent';
 import { ProductDetail, ProductGrid } from './components/Catalog';
 import StoreProfile from './components/StoreProfile';
 import Home, { Pantry } from './components/Home';
 import Account from './components/Account';
 import Cart from './components/Cart';
-import Orders from './components/Orders';
+import Orders, { ChangePaymentMethod } from './components/Orders';
 import Disputes from './components/Disputes';
 import SellerDashboard from './components/SellerDashboard';
 import AdminDashboard from './components/AdminDashboard';
 import { Feedback, Loading, SectionTitle } from './components/UI';
 
 function PaymentReturn({ reference, onChange, onDone }: { reference: string; onChange: () => void; onDone: () => void }) {
+  const resource = useResource<{ orders: Order[] }>('/orders');
+  const order = resource.data?.orders.find(item => item.paymentReference === reference);
   const action = useAction(onChange);
   const started = useRef(false);
   const [status, setStatus] = useState('');
@@ -27,7 +30,18 @@ function PaymentReturn({ reference, onChange, onDone }: { reference: string; onC
     if (result.order.paymentStatus === 'Paid') { onDone(); window.location.hash = 'orders'; }
   }, 'Payment status refreshed.');
   useEffect(() => { if (!started.current) { started.current = true; verify(); } }, []);
-  return <section className="panel payment-return"><h2>Checking your payment</h2><Feedback error={action.error} success={action.success} /><p>{action.busy ? 'Confirming your transaction with Flutterwave…' : status ? 'Payment status: ' + status + '. View your orders for the latest details.' : 'Your payment has not been confirmed yet. You can safely retry verification.'}</p><div className="action-row"><button className="button primary" disabled={action.busy} onClick={verify}>Check payment again</button><button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders</button></div></section>;
+  return <section className="payment-return" aria-label="Payment status">
+    <div className="payment-return-summary">
+      <span className="payment-return-icon"><CreditCard size={19} aria-hidden="true" /></span>
+      <div className="payment-return-copy"><h2>{action.busy ? 'Checking payment' : 'Payment update'}</h2><p role="status">{action.busy ? 'Confirming with Flutterwave…' : status ? 'Status: ' + status + '. Track your order below.' : 'Not confirmed yet. You can check again.'}</p></div>
+    </div>
+    <div className="payment-return-actions">
+      <button className="button secondary" disabled={action.busy} onClick={verify}><RefreshCw size={14} aria-hidden="true" />{action.busy ? 'Checking…' : 'Check again'}</button>
+      {order && !action.busy && <ChangePaymentMethod compact order={order} onChange={() => { onChange(); onDone(); window.location.hash = 'orders'; }} />}
+      <button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders<ArrowUpRight size={14} aria-hidden="true" /></button>
+    </div>
+    <Feedback error={action.error} />
+  </section>;
 }
 
 export default function App() {
@@ -105,7 +119,7 @@ export default function App() {
 
   return <div className={"site-shell role-" + (routeRoot === "admin" ? "admin" : routeRoot === "seller" ? "seller" : "buyer")}>
     <div className="site-chrome" ref={chromeRef}>
-      <div className="top-strip">Good food. Independent businesses. A pantry with a story.</div>
+      <div className="top-strip">for help with your order message {siteContent.phone}</div>
       <header className="site-header">
         <a className="brand" href="#catalog"><img className="brand-logo" src={brandLogo} alt="The Edible Shop logo" width={1280} height={1280} /><span>The Edible Shop<small>...taste the harvest</small></span></a>
         <nav className="main-nav" aria-label="Main navigation">

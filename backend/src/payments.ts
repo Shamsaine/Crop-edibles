@@ -22,9 +22,24 @@ export async function initializePayment(orderId:string,email:string) {
   if(payment.authorization_url)return {order:(await orders('o.id=$1',[orderId],db))[0],authorizationUrl:payment.authorization_url};
   const data=await gateway('/payments',{customer:{email},amount:(Number(payment.amount_minor)/100).toFixed(2),currency:'NGN',tx_ref:payment.reference,redirect_url:`${config.appUrl}/?paymentReference=${encodeURIComponent(payment.reference)}`,meta:{orderId,paymentId:payment.id},customizations:{title:'The Edible Shop'}});
   let checkout:URL;try{checkout=new URL(data.link);}catch{throw new HttpError(502,'Flutterwave returned an invalid checkout URL.');}
-  if(checkout.protocol!=='https:'||checkout.hostname!=='checkout.flutterwave.com'||checkout.username||checkout.password)throw new HttpError(502,'Flutterwave returned an invalid checkout URL.');
+  const allowedHosts=['checkout.flutterwave.com',...(config.flutterwaveSecretKey.startsWith('FLWSECK_TEST')?['checkout-v2.dev-flutterwave.com']:[])];
+  if(checkout.protocol!=='https:'||!allowedHosts.includes(checkout.hostname)||checkout.port||checkout.username||checkout.password)throw new HttpError(502,'Flutterwave returned an invalid checkout URL.');
   await db.query('UPDATE payments SET authorization_url=$2,last_error=NULL WHERE id=$1',[payment.id,checkout.href]);
   return {order:(await orders('o.id=$1',[orderId],db))[0],authorizationUrl:checkout.href};
+ });
+}
+export async function changePaymentMethod(orderId:string,buyerId:string) {
+ return transaction(async db=>{
+  const {rows}=await db.query('SELECT o.*,p.authorization_url,p.provider,p.id payment_id FROM orders o LEFT JOIN payments p ON p.order_id=o.id WHERE o.id=$1 AND o.buyer_id=$2 FOR UPDATE OF o',[orderId,buyerId]);
+  const order=rows[0];if(!order)throw new HttpError(404,'Order not found.');
+  if(order.payment_method==='cod'&&order.payment_status==='Unpaid'&&order.status==='Confirmed')return {order:(await orders('o.id=$1',[orderId],db))[0]};
+  if(order.payment_method!=='flutterwave'||order.provider!=='flutterwave'||order.payment_status!=='Pending'||order.status!=='Awaiting Payment')throw new HttpError(409,'Only an unpaid order awaiting payment can change payment method.');
+  // Disabling the hosted link must succeed before the order can become payable in cash.
+  if(order.authorization_url)await gateway('/payments/link/disable',{link:order.authorization_url});
+  await db.query("UPDATE payments SET status='Failed',authorization_url=NULL,last_error='Buyer switched to pay on delivery; any subsequent online payment requires review.' WHERE id=$1",[order.payment_id]);
+  await db.query("UPDATE orders SET payment_method='cod',payment_status='Unpaid',status='Confirmed',updated_at=now() WHERE id=$1",[orderId]);
+  await db.query("UPDATE order_items SET status='Confirmed' WHERE order_id=$1 AND status='Awaiting Payment'",[orderId]);
+  return {order:(await orders('o.id=$1',[orderId],db))[0]};
  });
 }
 export async function releaseStock(db:DB,orderId:string) {
@@ -34,7 +49,7 @@ export async function releaseStock(db:DB,orderId:string) {
 export async function applyPayment(data:any) {
  if(!data || typeof data.tx_ref!=='string'||!Number.isSafeInteger(Number(data.id))||Number(data.id)<=0)throw new HttpError(400,'Invalid payment reference.');
  return transaction(async db=>{
-  const {rows}=await db.query("SELECT p.*,o.status order_status,o.payment_status FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.reference=$1 AND p.provider='flutterwave' FOR UPDATE OF o,p",[data.tx_ref]);
+  const {rows}=await db.query("SELECT p.*,o.status order_status,o.payment_status,o.payment_method FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.reference=$1 AND p.provider='flutterwave' FOR UPDATE OF o,p",[data.tx_ref]);
   const payment=rows[0];
   if(!payment)return null; // A valid webhook for another application is ignored.
   const amount=String(data.amount);
@@ -44,6 +59,11 @@ export async function applyPayment(data:any) {
   if(payment.provider_transaction_id&&payment.provider_transaction_id!==String(data.id)&&payment.payment_status==='Paid')throw new HttpError(409,'Another successful transaction already paid this order. Contact support.');
   await db.query('UPDATE payments SET checked_at=now() WHERE id=$1',[payment.id]);
   if(data.status==='successful') {
+   if(payment.payment_method==='cod'){
+    await db.query("UPDATE payments SET status='Needs Review',provider_transaction_id=$2,paid_at=now(),last_error='Online payment arrived after switching to pay on delivery; review before collecting cash or arrange a refund.' WHERE id=$1",[payment.id,String(data.id)]);
+    await db.query("UPDATE orders SET payment_status='Needs Review',updated_at=now() WHERE id=$1",[payment.order_id]);
+    return payment.order_id;
+   }
    if(payment.payment_status==='Paid' || payment.payment_status==='Needs Review')return payment.order_id;
    if(payment.order_status==='Cancelled'){
     await db.query("UPDATE payments SET status='Needs Review',provider_transaction_id=$2,paid_at=now(),last_error='Payment arrived after cancellation; contact buyer and arrange a manual refund or fulfillment.' WHERE id=$1",[payment.id,String(data.id)]);
