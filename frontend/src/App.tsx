@@ -12,7 +12,7 @@ import StoreProfile from './components/StoreProfile';
 import Home, { Pantry } from './components/Home';
 import Account from './components/Account';
 import Cart from './components/Cart';
-import Orders, { ChangePaymentMethod } from './components/Orders';
+import Orders, { ChangePaymentMethod, CancelOrder } from './components/Orders';
 import Disputes from './components/Disputes';
 import SellerDashboard from './components/SellerDashboard';
 import AdminDashboard from './components/AdminDashboard';
@@ -39,6 +39,7 @@ function PaymentReturn({ reference, onChange, onDone }: { reference: string; onC
       <button className="button secondary" disabled={action.busy} onClick={verify}><RefreshCw size={14} aria-hidden="true" />{action.busy ? 'Checking…' : 'Check again'}</button>
       {order && !action.busy && <ChangePaymentMethod compact order={order} onChange={() => { onChange(); onDone(); window.location.hash = 'orders'; }} />}
       <button className="text-button" disabled={action.busy} onClick={() => { onDone(); window.location.hash = 'orders'; }}>View orders<ArrowUpRight size={14} aria-hidden="true" /></button>
+      {order && !action.busy && <CancelOrder order={order} onChange={() => { onChange(); onDone(); window.location.hash = 'orders'; }} />}
     </div>
     <Feedback error={action.error} />
   </section>;

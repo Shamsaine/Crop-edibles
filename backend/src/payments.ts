@@ -35,12 +35,15 @@ export async function changePaymentMethod(orderId:string,buyerId:string) {
   if(order.payment_method==='cod'&&order.payment_status==='Unpaid'&&order.status==='Confirmed')return {order:(await orders('o.id=$1',[orderId],db))[0]};
   if(order.payment_method!=='flutterwave'||order.provider!=='flutterwave'||order.payment_status!=='Pending'||order.status!=='Awaiting Payment')throw new HttpError(409,'Only an unpaid order awaiting payment can change payment method.');
   // Disabling the hosted link must succeed before the order can become payable in cash.
-  if(order.authorization_url)await gateway('/payments/link/disable',{link:order.authorization_url});
+  if(order.authorization_url)await disableCheckout(order.authorization_url);
   await db.query("UPDATE payments SET status='Failed',authorization_url=NULL,last_error='Buyer switched to pay on delivery; any subsequent online payment requires review.' WHERE id=$1",[order.payment_id]);
   await db.query("UPDATE orders SET payment_method='cod',payment_status='Unpaid',status='Confirmed',updated_at=now() WHERE id=$1",[orderId]);
   await db.query("UPDATE order_items SET status='Confirmed' WHERE order_id=$1 AND status='Awaiting Payment'",[orderId]);
   return {order:(await orders('o.id=$1',[orderId],db))[0]};
  });
+}
+export async function disableCheckout(link:string) {
+ if(await gateway('/payments/link/disable',{link})!==true)throw new HttpError(502,'Could not close the existing checkout. Please try again.');
 }
 export async function releaseStock(db:DB,orderId:string) {
  const {rows}=await db.query('SELECT product_id,quantity FROM order_items WHERE order_id=$1 ORDER BY product_id',[orderId]);
