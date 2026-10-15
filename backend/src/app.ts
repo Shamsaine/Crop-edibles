@@ -1,4 +1,5 @@
 import express from 'express';
+import { cancelOrder } from './order-cancellation.js';
 import { passwordRecoveryRouter } from './password-recovery.js';
 import { imagesRouter, checkImageOwnership } from './images.js';
 import { productSchema, imageFields, createProducts } from './product-write.js';
@@ -14,7 +15,7 @@ import { z } from 'zod';
 import { pool, transaction, config } from './db.js';
 import { route, id, required, passwordSchema, emailSchema, HttpError, hashPassword, verifyPassword, userJSON, sessionMiddleware, requireUser, role, authLimit, createSession, cookieToken, tokenHash, clearSession, errors } from './auth.js';
 import { products, cart, addressJSON, orders, applications, disputes } from './views.js';
-import { initializePayment, changePaymentMethod, verifyPayment, verifyWebhookPayment, releaseStock } from './payments.js';
+import { initializePayment, changePaymentMethod, verifyPayment, verifyWebhookPayment } from './payments.js';
 
 export const app=express();
 app.disable('x-powered-by');
@@ -211,14 +212,7 @@ app.patch('/api/orders/:id/payment-method',requireUser,route(async(req,res)=>{
  res.json(await changePaymentMethod(id(req.params.id),req.user!.id));
 }));
 app.post('/api/orders/:id/cancel',requireUser,route(async(req,res)=>{
- const orderId=id(req.params.id);
- await transaction(async db=>{
- const {rows}=await db.query('SELECT * FROM orders WHERE id=$1 AND buyer_id=$2 FOR UPDATE',[orderId,req.user!.id]);const order=rows[0];if(!order)throw new HttpError(404,'Order not found.');if(order.status==='Cancelled')return;
- if(order.payment_status==='Needs Review')throw new HttpError(409,'This payment needs review before cancellation. Contact support.');
- if(order.payment_method!=='cod')throw new HttpError(409,'Online payment orders must be verified before cancellation. Open a support case if assistance is needed.');
- const started=await db.query("SELECT 1 FROM order_items WHERE order_id=$1 AND status<>'Confirmed'",[orderId]);if(started.rowCount)throw new HttpError(409,'Fulfillment has started. Open a support case for this order.');
- await releaseStock(db,orderId);await db.query("UPDATE orders SET status='Cancelled',payment_status='Cancelled',updated_at=now() WHERE id=$1",[orderId]);await db.query("UPDATE order_items SET status='Cancelled' WHERE order_id=$1",[orderId]);
- });res.json({order:(await orders('o.id=$1',[orderId]))[0]});
+ res.json(await cancelOrder(id(req.params.id),req.user!.id));
 }));
 app.get('/api/seller/application',requireUser,route(async(req,res)=>res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]||null})));
 app.post('/api/seller/application',requireUser,route(async(req,res)=>{

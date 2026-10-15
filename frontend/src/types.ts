@@ -19,6 +19,7 @@ export interface OrderItem {
   unit: string; quantity: number; unitPriceMinor: number; totalMinor: number; status: OrderStatus; reviewed: boolean;
 }
 export interface Order {
+  cancellationTicketId?: string;
   id: string; createdAt: string; status: OrderStatus; paymentMethod: 'cod' | 'flutterwave'; paymentProvider?: 'flutterwave' | 'legacy'; paymentStatus: string;
   subtotalMinor: number; deliveryFeeMinor: number; totalMinor: number; address: Address; items: OrderItem[];
   paymentReference?: string;
