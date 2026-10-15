@@ -1,8 +1,8 @@
 ﻿// Public footer details. Update these when the shop's contact details change.
 export const siteContent = {
-  email: 'edibleshop@gmail.com',
-  partnershipEmail: 'theedibleshopp@gmail.com',
-  phone: '',
+  email: 'edibleshopp@gmail.com',
+  partnershipEmail: 'edibleshopp@gmail.com',
+  phone: '+2349038049693',
   website: 'https://www.cropedibles.com',
   socials: {
     instagram: 'https://www.instagram.com/cropedibles?stkn=eXB0c3oyanB5eGQ5&utm_source=qr',

@@ -4,7 +4,7 @@ import type { Address, Cart as CartData, Order, ShopConfig } from '../types';
 import { Empty, Feedback, Loading, ProductImage, SectionTitle } from './UI';
 export function redirectToPayment(url: string) {
   const target = new URL(url);
-  if (target.protocol !== 'https:' || target.hostname !== 'checkout.flutterwave.com') throw new Error('The payment provider returned an invalid checkout address.');
+  if (target.protocol !== 'https:' || !['checkout.flutterwave.com', 'checkout-v2.dev-flutterwave.com'].includes(target.hostname) || target.port || target.username || target.password) throw new Error('The payment provider returned an invalid checkout address.');
   window.location.assign(target.href);
 }
 export default function Cart({ cart, loading, error, revision, onChange }: { cart: CartData | null; loading: boolean; error: string; revision: number; onChange: () => void }) {
