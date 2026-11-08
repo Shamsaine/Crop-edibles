@@ -10,7 +10,9 @@ process.env.DB_SCHEMA=schema;
 const { pool,config }=await import('../src/db.js');
 const { migrate }=await import('../src/migrate.js');
 const { hashPassword }=await import('../src/auth.js');
+const { mailer }=await import('../src/mail.js');
 const { app }=await import('../src/app.js');
+mailer.sendEmailVerification=async()=>{};
 let server:Server;
 let base='';
 const password='A-good-test-password-42';
@@ -19,6 +21,7 @@ type Account={id:string;email:string;cookie:string};
 const realFetch=globalThis.fetch;
 const providerTransactions=new Map<string,{amount:number;currency:string;status:string;id:number}>();
 let providerFailure=false;
+let checkoutHost='checkout-v2.dev-flutterwave.com';
 
 test('database-backed marketplace and payment lifecycle',{timeout:120000},async t=>{
  await pool.query(`CREATE SCHEMA ${schema}`);
@@ -31,7 +34,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   const response=await realFetch(base+path,{method,headers:{'Content-Type':'application/json',Origin:config.appUrl,...(account?{Cookie:account.cookie}:{}),...extra},...(body!==undefined?{body:JSON.stringify(body)}:{})});
   const json=await response.json() as any;return {status:response.status,body:json,cookie:response.headers.get('set-cookie')?.split(';')[0]||'',headers:response.headers};
  };
- const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));accounts[key]={id:result.body.user.id,email,cookie:result.cookie};assert.match(result.headers.get('set-cookie')||'',/HttpOnly/);assert.match(result.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
+ const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));assert.equal(result.body.user.emailVerified,false);assert.equal((await request('GET','/cart',undefined,{id:result.body.user.id,email,cookie:result.cookie})).status,401,'Registration must not create a usable session');await pool.query('UPDATE users SET email_verified_at=now() WHERE email=$1',[email]);const login=await request('POST','/auth/login',{email,password});assert.equal(login.status,200,JSON.stringify(login.body));accounts[key]={id:result.body.user.id,email,cookie:login.cookie};assert.match(login.headers.get('set-cookie')||'',/HttpOnly/);assert.match(login.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
  let product1:any,product2:any,address1:any,address2:any,order:any;
  try{
  await t.test('auth registration, sessions, origin protection and roles',async()=>{
@@ -56,13 +59,20 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    process.env.NODE_ENV='production';
    try {assert.equal(isAllowedOrigin('http://127.0.0.1:3000'),false);assert.equal(isAllowedOrigin('http://172.20.80.1:3000'),true);assert.equal(isAllowedOrigin('https://attacker.example'),false);}
    finally {if(previousMode===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousMode;}
-   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',business:vendorBusiness});
-   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie};
+   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',phone:'+2348098765432',business:vendorBusiness});
+   assert.equal(registered.status,201,JSON.stringify(registered.body));assert.equal(registered.body.user.emailVerified,false);
+   await pool.query("UPDATE users SET email_verified_at=now() WHERE email=$1",['new-seller@example.test']);
+   const sellerLogin=await request('POST','/auth/login',{email:'new-seller@example.test',password});
+   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:sellerLogin.cookie};
    assert.equal((await request('GET','/seller/application',undefined,accounts.pendingSeller)).body.application.status,'Pending');
-   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller'});assert.equal(incomplete.status,400);
+   assert.equal((await pool.query('SELECT phone FROM users WHERE id=$1',[registered.body.user.id])).rows[0].phone,'+2348098765432');
+   assert.equal((await request('PATCH','/seller/application/images',{images:[]},accounts.pendingSeller)).status,200,'A verified seller can update pictures on an existing pending application');
+   const missingPhone=await request('POST','/auth/register',{name:'Missing phone seller',email:'missing-phone@example.test',password,accountType:'seller',business:vendorBusiness});assert.equal(missingPhone.status,400);
+   assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['missing-phone@example.test'])).rowCount,0,'Seller registration must require a contact phone');
+   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller',phone:'+2348098765432'});assert.equal(incomplete.status,400);
    assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['incomplete@example.test'])).rowCount,0,'Invalid signup must not leave an account behind');
    assert.equal(registered.status,201);assert.equal(registered.body.user.accountType,'seller');assert.equal(registered.body.user.role,'buyer');
-   assert.equal((await request('GET','/seller/products',undefined,{id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie})).status,403);
+   assert.equal((await request('GET','/seller/products',undefined,accounts.pendingSeller)).status,403);
    assert.equal((await request('POST','/auth/register',{name:'Bad role',email:'bad-role@example.test',password,accountType:'admin'})).status,400);
   } finally { if(previous===undefined)delete process.env.ALLOWED_ORIGINS;else process.env.ALLOWED_ORIGINS=previous; }
  });
@@ -142,6 +152,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   assert.equal((await request('GET','/cart',undefined,accounts.buyer)).body.items.length,0);
   assert.equal((await request('GET',`/orders/${order.id}`,undefined,accounts.other)).status,404);
   const sellerOrders=(await request('GET','/seller/orders',undefined,accounts.vendor)).body.orders;assert.equal(sellerOrders[0].items.length,1);assert.equal(sellerOrders[0].totalMinor,24690);
+  assert.equal((await request('POST','/orders',{...body,deliveryPriority:'urgent'},accounts.buyer)).status,409,'An idempotency key cannot be reused with a different delivery priority');
  });
  await t.test('fulfillment ownership, explicit COD collection, reviews and disputes',async()=>{
   assert.equal((await request('POST',`/products/${product1.id}/reviews`,{rating:5,comment:'Great'},accounts.buyer)).status,403);
@@ -216,39 +227,131 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,3);
   await request('DELETE',`/cart/${product1.id}`,undefined,accounts.buyer);await request('DELETE',`/cart/${product1.id}`,undefined,accounts.other);
  });
- await t.test('Paystack hosted checkout, verification, signed webhooks and late payment handling',async()=>{
-  config.paystackKey='sk_test_local_integration_only';
+ await t.test('Flutterwave hosted checkout, verification, signed webhooks and late payment handling',async()=>{
+  config.flutterwaveSecretKey='FLWSECK_TEST-local-integration-only';config.flutterwaveWebhookSecret='test-webhook-secret';
   globalThis.fetch=(async(input:any,init?:RequestInit)=>{
-   const url=String(input);if(!url.startsWith('https://api.paystack.co/'))return realFetch(input,init);
+   const url=String(input);if(!url.startsWith('https://api.flutterwave.com/v3/'))return realFetch(input,init);
    if(providerFailure)throw new Error('Simulated provider outage');
-   if(url.endsWith('/transaction/initialize')){const body=JSON.parse(String(init?.body));providerTransactions.set(body.reference,{amount:body.amount,currency:body.currency,status:'pending',id:42});return new Response(JSON.stringify({status:true,data:{authorization_url:'https://checkout.paystack.com/local-test'}}));}
-   const reference=decodeURIComponent(url.split('/').at(-1)!);const data=providerTransactions.get(reference);return new Response(JSON.stringify(data?{status:true,data:{...data,reference}}:{status:false}),{status:data?200:404});
+   assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer '+config.flutterwaveSecretKey);
+   if(url.endsWith('/payments/link/disable'))return new Response(JSON.stringify({status:'success',data:true}));
+   if(url.endsWith('/payments')){const body=JSON.parse(String(init?.body));assert.match(body.amount,/^\d+\.\d{2}$/);assert.ok(body.customer.email);assert.ok(body.redirect_url.includes('paymentReference='));providerTransactions.set(body.tx_ref,{amount:Number(body.amount),currency:body.currency,status:'pending',id:providerTransactions.size+42});return new Response(JSON.stringify({status:'success',data:{link:`https://${checkoutHost}/v3/hosted/pay/local-test`}}));}
+   const parsed=new URL(url);const entry=parsed.pathname.endsWith('/verify')?[...providerTransactions].find(([,value])=>String(value.id)===parsed.pathname.split('/').at(-2)):[parsed.searchParams.get('tx_ref')!,providerTransactions.get(parsed.searchParams.get('tx_ref')!)] as const;
+   const reference=entry?.[0];const data=entry?.[1];return new Response(JSON.stringify(data?{status:'success',data:{...data,tx_ref:reference}}:{status:'error'}),{status:data?200:404});
   }) as typeof fetch;
-  assert.equal((await request('GET','/config')).body.payments.paystack,true);
+  assert.equal((await request('GET','/config')).body.payments.flutterwave,true);
   await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);
-  const checkout=await request('POST','/orders',{addressId:address1.id,paymentMethod:'paystack',idempotencyKey:randomUUID()},accounts.buyer);assert.equal(checkout.status,201,JSON.stringify(checkout.body));assert.equal(checkout.body.order.paymentStatus,'Pending');assert.match(checkout.body.authorizationUrl,/^https:\/\/checkout.paystack.com\//);
+  const checkout=await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',deliveryPriority:'urgent',idempotencyKey:randomUUID()},accounts.buyer);assert.equal(checkout.status,201,JSON.stringify(checkout.body));assert.equal(checkout.body.order.paymentStatus,'Pending');assert.equal(checkout.body.order.deliveryPriority,'urgent');assert.equal(checkout.body.order.deliveryFeeMinor,50000);assert.equal(checkout.body.order.totalMinor,checkout.body.order.subtotalMinor+50000);assert.match(checkout.body.authorizationUrl,/^https:\/\/checkout-v2.dev-flutterwave.com\//);
+  checkoutHost='checkout.flutterwave.com';
   const onlineOrder=checkout.body.order;const reference=onlineOrder.paymentReference;
+  assert.equal(Number((await pool.query('SELECT amount_minor FROM payments WHERE order_id=$1',[onlineOrder.id])).rows[0].amount_minor),onlineOrder.totalMinor,'The online payment snapshot includes the urgent delivery fee');
   assert.equal((await request('PATCH',`/seller/order-items/${onlineOrder.items[0].id}`,{status:'Processed'},accounts.vendor)).status,409);
   assert.equal((await request('POST','/payments/verify',{reference},accounts.other)).status,404);
   assert.equal((await request('POST','/payments/verify',{reference},accounts.buyer)).body.order.paymentStatus,'Pending');
-  const webhook=async(data:any,signatureOverride?:string)=>{const body=JSON.stringify({event:'charge.success',data});const signature=signatureOverride||createHmac('sha512',config.paystackKey).update(body).digest('hex');return realFetch(base+'/payments/webhook',{method:'POST',headers:{'Content-Type':'application/json','x-paystack-signature':signature},body});};
-  const payment={...providerTransactions.get(reference)!,reference,status:'success'};
-  assert.equal((await webhook(payment,'0'.repeat(128))).status,401);
-  assert.equal((await webhook({...payment,amount:1})).status,400);
-  assert.equal((await webhook({...payment,currency:'USD'})).status,400);
+  const webhook=async(data:any,signatureOverride?:string)=>{const body=JSON.stringify({event:'charge.completed',data});const signature=signatureOverride||createHmac('sha256',config.flutterwaveWebhookSecret).update(body).digest('base64');return realFetch(base+'/payments/webhook',{method:'POST',headers:{'Content-Type':'application/json','flutterwave-signature':signature},body});};
+  const payment={...providerTransactions.get(reference)!,tx_ref:reference,status:'successful'};
+  assert.equal((await webhook(payment,'invalid-signature')).status,401);
+  assert.equal((await webhook(payment)).status,200,'A successful notification alone cannot prove payment');
+  assert.equal((await request('GET',`/orders/${onlineOrder.id}`,undefined,accounts.buyer)).body.order.paymentStatus,'Pending');
+  providerTransactions.get(reference)!.amount=1;assert.equal((await webhook(payment)).status,400);providerTransactions.get(reference)!.amount=payment.amount;
+  providerTransactions.get(reference)!.currency='USD';assert.equal((await webhook(payment)).status,400);providerTransactions.get(reference)!.currency=payment.currency;
+  providerTransactions.get(reference)!.status='successful';
   assert.equal((await webhook(payment)).status,200);assert.equal((await webhook(payment)).status,200);
+  assert.equal((await realFetch(base+'/payments/webhook',{method:'POST',headers:{'Content-Type':'application/json','verif-hash':config.flutterwaveWebhookSecret},body:JSON.stringify({event:'charge.completed',data:payment})})).status,200);
   assert.equal((await request('GET',`/orders/${onlineOrder.id}`,undefined,accounts.buyer)).body.order.paymentStatus,'Paid');
   assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,2);
+  assert.equal((await request('PATCH',`/orders/${onlineOrder.id}/payment-method`,{paymentMethod:'cod'},accounts.buyer)).status,409,'Paid orders cannot switch');
   await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);
-  const abandoned=(await request('POST','/orders',{addressId:address1.id,paymentMethod:'paystack',idempotencyKey:randomUUID()},accounts.buyer)).body.order;
+  const switchable=(await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',idempotencyKey:randomUUID()},accounts.buyer)).body.order;
+  assert.equal((await request('PATCH',`/orders/${switchable.id}/payment-method`,{paymentMethod:'cod'},accounts.other)).status,404);
+  providerFailure=true;
+  assert.equal((await request('PATCH',`/orders/${switchable.id}/payment-method`,{paymentMethod:'cod'},accounts.buyer)).status,502,'Do not switch when the old checkout cannot be disabled');
+  providerFailure=false;
+  const switched=await request('PATCH',`/orders/${switchable.id}/payment-method`,{paymentMethod:'cod'},accounts.buyer);
+  assert.equal(switched.status,200,JSON.stringify(switched.body));assert.equal(switched.body.order.paymentMethod,'cod');assert.equal(switched.body.order.paymentStatus,'Unpaid');assert.equal(switched.body.order.items[0].status,'Confirmed');
+  assert.equal((await request('POST',`/orders/${switchable.id}/payment`,{},accounts.buyer)).status,404);
+  assert.equal((await request('PATCH',`/orders/${switchable.id}/payment-method`,{paymentMethod:'cod'},accounts.buyer)).status,200);
+  assert.equal((await request('POST',`/orders/${switchable.id}/cancel`,{},accounts.buyer)).status,200);
+  providerTransactions.get(switchable.paymentReference)!.status='successful';
+  assert.equal((await webhook({...providerTransactions.get(switchable.paymentReference)!,tx_ref:switchable.paymentReference})).status,200);
+  assert.equal((await request('GET',`/orders/${switchable.id}`,undefined,accounts.buyer)).body.order.paymentStatus,'Needs Review');
+  assert.equal((await request('PATCH',`/seller/order-items/${switchable.items[0].id}`,{status:'Processed'},accounts.vendor)).status,409);
+  assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,2,'Switch does not release or reserve stock a second time');
+  await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);
+  const abandoned=(await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',idempotencyKey:randomUUID()},accounts.buyer)).body.order;
   providerTransactions.get(abandoned.paymentReference)!.status='failed';
+  assert.equal((await request('POST','/payments/verify',{reference:abandoned.paymentReference},accounts.buyer)).body.order.paymentStatus,'Pending');
+  assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,1,'Failed attempts keep stock reserved for checkout retries');
+  providerTransactions.get(abandoned.paymentReference)!.status='cancelled';
   assert.equal((await request('POST','/payments/verify',{reference:abandoned.paymentReference},accounts.buyer)).body.order.paymentStatus,'Failed');
   assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,2);
-  const late={...providerTransactions.get(abandoned.paymentReference)!,reference:abandoned.paymentReference,status:'success'};assert.equal((await webhook(late)).status,200);
+  providerTransactions.get(abandoned.paymentReference)!.status='successful';const late={...providerTransactions.get(abandoned.paymentReference)!,tx_ref:abandoned.paymentReference};assert.equal((await webhook(late)).status,200);
   assert.equal((await request('GET',`/orders/${abandoned.id}`,undefined,accounts.buyer)).body.order.paymentStatus,'Needs Review');assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,2);
   await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);providerFailure=true;
-  const key=randomUUID();assert.equal((await request('POST','/orders',{addressId:address1.id,paymentMethod:'paystack',idempotencyKey:key},accounts.buyer)).status,502);
-  providerFailure=false;assert.equal((await request('POST','/orders',{addressId:address1.id,paymentMethod:'paystack',idempotencyKey:key},accounts.buyer)).status,201);
+  const key=randomUUID();assert.equal((await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',idempotencyKey:key},accounts.buyer)).status,502);
+  providerFailure=false;
+  const recovered=await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',idempotencyKey:key},accounts.buyer);assert.equal(recovered.status,201);
+  await pool.query('UPDATE payments SET authorization_url=NULL WHERE order_id=$1',[recovered.body.order.id]);
+  checkoutHost='checkout.flutterwave.com.attacker.example';
+  assert.equal((await request('POST',`/orders/${recovered.body.order.id}/payment`,{},accounts.buyer)).status,502,'Lookalike checkout domains must be rejected');
+  checkoutHost='checkout-v2.dev-flutterwave.com';
+  config.flutterwaveSecretKey='FLWSECK-live-integration-only';
+  assert.equal((await request('POST',`/orders/${recovered.body.order.id}/payment`,{},accounts.buyer)).status,502,'Live keys must not redirect to sandbox');
+  config.flutterwaveSecretKey='FLWSECK_TEST-local-integration-only';
+  assert.equal((await request('POST',`/orders/${recovered.body.order.id}/payment`,{},accounts.buyer)).status,200,'Test keys accept the actual sandbox checkout domain');
+  // Cancellation at every stage must preserve stock and captured-payment history.
+  const priorStock=(await pool.query('SELECT stock FROM products WHERE id=$1',[product1.id])).rows[0].stock;
+  const cancellationOrders:string[]=[];
+  await pool.query('UPDATE products SET stock=20 WHERE id=$1',[product1.id]);
+  const createCancellationOrder=async(method:'cod'|'flutterwave')=>{
+   await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);
+   const result=await request('POST','/orders',{addressId:address1.id,paymentMethod:method,idempotencyKey:randomUUID()},accounts.buyer);
+   assert.equal(result.status,201,JSON.stringify(result.body));cancellationOrders.push(result.body.order.id);return result.body.order;
+  };
+  const pending=await createCancellationOrder('flutterwave');
+  providerFailure=true;
+  const unavailableCancellation=await request('POST',`/orders/${pending.id}/cancel`,{},accounts.buyer);
+  assert.equal(unavailableCancellation.status,200);assert.ok(unavailableCancellation.body.ticketId,'Provider outages still allow a cancellation request');
+  assert.equal((await request('GET',`/orders/${pending.id}`,undefined,accounts.buyer)).body.order.status,'Awaiting Payment');
+  providerFailure=false;
+  const cancelledPending=await request('POST',`/orders/${pending.id}/cancel`,{},accounts.buyer);
+  assert.equal(cancelledPending.body.order.status,'Cancelled');assert.equal(cancelledPending.body.order.paymentStatus,'Cancelled');
+  assert.equal((await request('POST',`/orders/${pending.id}/payment`,{},accounts.buyer)).status,409);
+  const processed=await createCancellationOrder('cod');
+  assert.equal((await request('PATCH',`/seller/order-items/${processed.items[0].id}`,{status:'Processed'},accounts.vendor)).status,200);
+  assert.equal((await request('POST',`/orders/${processed.id}/cancel`,{},accounts.other)).status,404);
+  const cancelledProcessed=await request('POST',`/orders/${processed.id}/cancel`,{},accounts.buyer);
+  assert.equal(cancelledProcessed.body.order.status,'Cancelled');
+  assert.equal((await request('POST',`/orders/${processed.id}/cancel`,{},accounts.buyer)).status,200);
+  assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,20,'Cancelled reservations release stock once');
+  assert.equal((await request('PATCH',`/seller/order-items/${processed.items[0].id}`,{status:'In Transit'},accounts.vendor)).status,409);
+  const paid=await createCancellationOrder('flutterwave');
+  providerTransactions.get(paid.paymentReference)!.status='successful';
+  assert.equal((await request('POST','/payments/verify',{reference:paid.paymentReference},accounts.buyer)).body.order.paymentStatus,'Paid');
+  const paidCancellation=await request('POST',`/orders/${paid.id}/cancel`,{},accounts.buyer);
+  assert.equal(paidCancellation.body.order.status,'Cancelled');assert.equal(paidCancellation.body.order.paymentStatus,'Needs Review');
+  assert.ok(paidCancellation.body.ticketId);assert.equal(paidCancellation.body.order.cancellationTicketId,paidCancellation.body.ticketId);
+  assert.equal((await request('GET',`/tickets/${paidCancellation.body.ticketId}`,undefined,accounts.admin)).status,200);
+  const paymentHistory=(await pool.query('SELECT paid_at,provider_transaction_id,status FROM payments WHERE order_id=$1',[paid.id])).rows[0];
+  assert.ok(paymentHistory.paid_at);assert.ok(paymentHistory.provider_transaction_id);assert.equal(paymentHistory.status,'Needs Review');
+  assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,20);
+  const dispatched=await createCancellationOrder('cod');
+  for(const status of ['Processed','In Transit'])assert.equal((await request('PATCH',`/seller/order-items/${dispatched.items[0].id}`,{status},accounts.vendor)).status,200);
+  const requests=await Promise.all([request('POST',`/orders/${dispatched.id}/cancel`,{},accounts.buyer),request('POST',`/orders/${dispatched.id}/cancel`,{},accounts.buyer)]);
+  assert.equal(requests[0].status,200);assert.ok(requests[0].body.ticketId);assert.equal(requests[0].body.ticketId,requests[1].body.ticketId);
+  assert.equal(requests[0].body.order.status,'In Transit');assert.equal((await request('GET',`/products/${product1.id}`)).body.product.stock,19,'Shipped goods cannot be restocked until returned');
+  assert.equal((await request('GET',`/tickets/${requests[0].body.ticketId}`,undefined,accounts.other)).status,404);
+  assert.equal((await request('PATCH',`/seller/order-items/${dispatched.items[0].id}`,{status:'Delivered',paymentCollected:true},accounts.vendor)).status,200);
+  const deliveredCancellation=await request('POST',`/orders/${dispatched.id}/cancel`,{},accounts.buyer);
+  assert.equal(deliveredCancellation.body.order.status,'Delivered');assert.equal(deliveredCancellation.body.order.paymentStatus,'Paid');assert.equal(deliveredCancellation.body.ticketId,requests[0].body.ticketId);
+  // Remove only these test fixtures so subsequent storefront assertions remain independent.
+  const cancellationTickets=(await pool.query('SELECT d.id FROM disputes d JOIN order_items i ON i.id=d.order_item_id WHERE i.order_id=ANY($1::uuid[])',[cancellationOrders])).rows.map(row=>row.id);
+  await pool.query('DELETE FROM ticket_events WHERE ticket_id=ANY($1::uuid[])',[cancellationTickets]);
+  await pool.query('DELETE FROM dispute_messages WHERE dispute_id=ANY($1::uuid[])',[cancellationTickets]);
+  await pool.query('DELETE FROM disputes WHERE id=ANY($1::uuid[])',[cancellationTickets]);
+  await pool.query('DELETE FROM payments WHERE order_id=ANY($1::uuid[])',[cancellationOrders]);
+  await pool.query('DELETE FROM order_items WHERE order_id=ANY($1::uuid[])',[cancellationOrders]);
+  await pool.query('DELETE FROM orders WHERE id=ANY($1::uuid[])',[cancellationOrders]);
+  await pool.query('UPDATE products SET stock=$2 WHERE id=$1',[product1.id,priorStock]);
  });
  await t.test('administrator creation, directories, account moderation and session revocation',async()=>{
   const created=await request('POST','/admin/admins',{name:'Second Admin',email:'second-admin@example.test',password},accounts.admin);
@@ -419,7 +522,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   assert.equal((await request('POST','/auth/logout',{},accounts.buyer)).status,200);assert.equal((await request('GET','/auth/me',undefined,accounts.buyer)).body.user,null);
  });
  }finally{
-  globalThis.fetch=realFetch;config.paystackKey='';
+  globalThis.fetch=realFetch;config.flutterwaveSecretKey='';
   if(server)await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
   // The generated prefix and identifier pattern are checked before the only destructive SQL.
   assert.match(schema,/^edible_test_[a-f0-9]{32}$/);

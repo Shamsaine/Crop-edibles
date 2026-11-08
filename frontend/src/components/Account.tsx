@@ -1,3 +1,5 @@
+import PasswordInput from './PasswordInput';
+import BusinessPhotos, { uploadBusinessPhotos } from './BusinessPhotos';
 import ProfileDetails from './ProfileDetails';
 import { useEffect, useState, type FormEvent } from 'react';
 import GoogleSignIn from './GoogleSignIn';
@@ -34,9 +36,38 @@ export function Addresses({ revision, onChange }: { revision: number; onChange: 
 }
 
 export function SellerApplication({revision,onChange}:{revision:number;onChange:()=>void}) {
- const resource=useResource<{application:VendorApplication|null}>('/seller/application',revision);const action=useAction(onChange);const application=resource.data?.application;
- const submit=(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const body=businessFromForm(new FormData(event.currentTarget));void action.run(()=>mutate('/seller/application','POST',body),'Store application submitted for administrator review.');};
- return <section className="panel store-application-panel"><p className="eyebrow">YOUR BUSINESS ON EDIBLE SHOP</p><h2>{application?'Your store application':'Apply to become a seller'}</h2><p className="muted">You can keep shopping while your application is reviewed. An approved store can add products and manage sales.</p><Feedback error={resource.error||action.error} success={action.success}/>{resource.loading?<Loading/>:resource.data&&<>{application&&<><div className={'store-application-status '+application.status.toLowerCase()}><div><strong>{application.businessName}</strong><p className="small">Registration {application.registrationNumber}</p></div><span className={"badge " + statusTone(application.status)}>{application.status}</span></div>{application.status==='Pending'&&<p className="notice">Your account is registered and your business information has been sent to the administrators. You’ll be able to publish products after approval.</p>}{application.adminNotes&&<div className="notice"><strong>Administrator feedback</strong><p className="preserve-lines">{application.adminNotes}</p></div>}{application.status==='Approved'&&<><dl className="details-grid"><div><dt>Legal entity / owner</dt><dd>{application.legalEntityName}</dd></div><div><dt>Category</dt><dd>{application.category}</dd></div><div><dt>Location</dt><dd>{application.location}</dd></div><div><dt>Business phone</dt><dd>{application.phone}</dd></div></dl><p className="preserve-lines">{application.description}</p><a className="button primary" href="#seller">Open your store</a></>}{application.status==='Pending'&&<details><summary>View submitted business information</summary><dl className="details-grid"><div><dt>Legal entity / owner</dt><dd>{application.legalEntityName}</dd></div><div><dt>Category</dt><dd>{application.category}</dd></div><div><dt>Business location</dt><dd>{application.location}</dd></div><div><dt>Business phone</dt><dd>{application.phone}</dd></div></dl><p className="preserve-lines">{application.description}</p></details>}</>}{(!application||application.status==='Rejected')&&<>{application?.status==='Rejected'&&<p className="muted">Update your business details and submit again. Your store registration number stays the same.</p>}<form className="form-grid" onSubmit={submit} key={application?.id||'new'}><BusinessFields application={application}/><button className="button primary" disabled={action.busy}>{action.busy?'Submitting…':application?'Resubmit application':'Submit store application'}</button></form></>}</>}</section>;
+ const [files,setFiles]=useState<File[]>([]);
+ const resource=useResource<{application:VendorApplication|null}>('/seller/application',revision);
+ const action=useAction(onChange);
+ const application=resource.data?.application;
+ const submit=(event:FormEvent<HTMLFormElement>)=>{
+  event.preventDefault();
+  const body=businessFromForm(new FormData(event.currentTarget));
+  void action.run(async()=>{const images=await uploadBusinessPhotos(files);await mutate('/seller/application','POST',{...body,images});setFiles([]);},'Store application submitted for administrator review.');
+ };
+ const saveImages=()=>void action.run(async()=>{
+  const images=await uploadBusinessPhotos(files);
+  await mutate('/seller/application/images','PATCH',{images});
+  setFiles([]);
+ },'Store pictures saved.');
+ return <section className="panel store-application-panel">
+  <p className="eyebrow">YOUR BUSINESS ON EDIBLE SHOP</p><h2>{application?'Your store application':'Apply to become a seller'}</h2>
+  <p className="muted">You can keep shopping while your application is reviewed. An approved store can add products and manage sales.</p>
+  <Feedback error={resource.error||action.error} success={action.success}/>
+  {resource.loading?<Loading/>:resource.data&&<>
+   {application&&<>
+    <div className={'store-application-status '+application.status.toLowerCase()}><div><strong>{application.businessName}</strong><p className="small">Registration {application.registrationNumber}</p></div><span className={"badge " + statusTone(application.status)}>{application.status}</span></div>
+    {application.businessRegistrationNumber&&<p className="small">Business registration: {application.businessRegistrationNumber}</p>}
+    <div className="store-photos">{application.images.map((url,index)=><img src={url} key={url} alt={'Submitted store picture '+(index+1)}/>)}</div>
+    {application.status!=='Rejected'&&<div className="form-stack"><BusinessPhotos files={files} onChange={setFiles} disabled={action.busy}/><button type="button" className="button secondary" disabled={action.busy||!files.length} onClick={saveImages}>{action.busy?'Saving…':'Save store pictures'}</button></div>}
+    {application.status==='Pending'&&<p className="notice">Your account is registered and your business information has been sent to the administrators. You’ll be able to publish products after approval.</p>}
+    {application.adminNotes&&<div className="notice"><strong>Administrator feedback</strong><p className="preserve-lines">{application.adminNotes}</p></div>}
+    {application.status==='Approved'&&<><dl className="details-grid"><div><dt>Legal entity / owner</dt><dd>{application.legalEntityName}</dd></div><div><dt>Category</dt><dd>{application.category}</dd></div><div><dt>Location</dt><dd>{application.location}</dd></div><div><dt>Business phone</dt><dd>{application.phone}</dd></div></dl><p className="preserve-lines">{application.description}</p><a className="button primary" href="#seller">Open your store</a></>}
+    {application.status==='Pending'&&<details><summary>View submitted business information</summary><dl className="details-grid"><div><dt>Legal entity / owner</dt><dd>{application.legalEntityName}</dd></div><div><dt>Category</dt><dd>{application.category}</dd></div><div><dt>Business location</dt><dd>{application.location}</dd></div><div><dt>Business phone</dt><dd>{application.phone}</dd></div></dl><p className="preserve-lines">{application.description}</p></details>}
+   </>}
+   {(!application||application.status==='Rejected')&&<>{application?.status==='Rejected'&&<p className="muted">Update your business details and submit again. Your store registration number stays the same.</p>}<form className="form-grid" onSubmit={submit} key={application?.id||'new'}><BusinessFields application={application}/><BusinessPhotos files={files} onChange={setFiles} disabled={action.busy}/><button className="button primary" disabled={action.busy}>{action.busy?'Submitting…':application?'Resubmit application':'Submit store application'}</button></form></>}
+  </>}
+ </section>;
 }
 function Profile({user,revision,onChange}:{user:User;revision:number;onChange:()=>void}) {
  const store=useResource<{application:VendorApplication|null}>(user.role==='admin'?null:'/seller/application',revision);const application=store.data?.application;
@@ -46,7 +77,7 @@ function Security({user,onChange}:{user:User;onChange:()=>void}) {
  const passwordAction=useAction();const googleAction=useAction(onChange);
  const connectGoogle=(credential:string)=>void googleAction.run(()=>mutate('/account/google','POST',{credential}),'Google connected. You can now sign in with Google.');
  const password=(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const element=event.currentTarget;const body=Object.fromEntries(new FormData(element));void passwordAction.run(async()=>{await mutate('/account/password','POST',body);element.reset();},'Password updated.');};
- return <section className="panel account-security"><h2>Sign-in & security</h2><Feedback error={googleAction.error} success={googleAction.success}/>{user.googleLinked?<p className="notice">Google is connected to this account.</p>:<><p className="muted">Connect the Google account matching {user.email} to sign in with Google next time.</p><GoogleSignIn onCredential={connectGoogle} busy={googleAction.busy}/></>}{user.hasPassword?<><h3>Change password</h3><Feedback error={passwordAction.error} success={passwordAction.success}/><form className="form-stack" onSubmit={password}><label>Current password<input type="password" name="currentPassword" autoComplete="current-password" required maxLength={128}/></label><label>New password<input type="password" name="password" autoComplete="new-password" required minLength={10} maxLength={128}/></label><small className="muted">Use at least 10 characters.</small><button className="button secondary" disabled={passwordAction.busy}>Update password</button></form></>:<p className="muted">You sign in with Google. Manage your Google password with Google.</p>}</section>;
+ return <section className="panel account-security"><h2>Sign-in & security</h2><Feedback error={googleAction.error} success={googleAction.success}/>{user.googleLinked?<p className="notice">Google is connected to this account.</p>:<><p className="muted">Connect the Google account matching {user.email} to sign in with Google next time.</p><GoogleSignIn onCredential={connectGoogle} busy={googleAction.busy}/></>}{user.hasPassword?<><h3>Change password</h3><Feedback error={passwordAction.error} success={passwordAction.success}/><form className="form-stack" onSubmit={password}><label>Current password<PasswordInput name="currentPassword" autoComplete="current-password" required maxLength={128}/></label><label>New password<PasswordInput name="password" autoComplete="new-password" required minLength={10} maxLength={128}/></label><small className="muted">Use at least 10 characters.</small><button className="button secondary" disabled={passwordAction.busy}>Update password</button></form></>:<p className="muted">You sign in with Google. Manage your Google password with Google.</p>}</section>;
 }
 export default function Account({user,revision,onChange}:{user:User;revision:number;onChange:()=>void}) {
  const current=()=>window.location.hash.slice(1).split('/')[1]||'profile';const [section,setSection]=useState(current);

@@ -26,13 +26,13 @@ export default function ProfileDetails({ user, onChange }: { user: User; onChang
     <Feedback error={action.error} success={action.success} />
     {editing ? <form className="profile-edit-form" onSubmit={submit}><fieldset disabled={action.busy}>
       <ImageUpload purpose="profile" value={images} onChange={setImages} onBusyChange={setUploading} />
-      <h3>Personal information</h3><p className="muted small">Biodata is optional and is not shown in product listings. Profile location is separate from your checkout delivery addresses.</p>
+      <h3>Personal information</h3><p className="muted small">Date of birth, gender and location are required to complete your profile. Your personal details stay off product listings. Profile location is separate from your checkout delivery addresses.</p>
       <div className="form-grid">
         <label>Full name<input name="name" required minLength={2} maxLength={120} autoComplete="name" defaultValue={user.name} /></label>
         <label>Phone number<input name="phone" type="tel" maxLength={30} autoComplete="tel" defaultValue={user.phone} /></label>
-        <label>Date of birth (optional)<input name="dateOfBirth" type="date" max={new Date().toISOString().slice(0,10)} autoComplete="bday" defaultValue={user.dateOfBirth || ''} /></label>
-        <label>Gender (optional)<input name="gender" maxLength={60} defaultValue={user.gender || ''} /></label>
-        <label>Nationality (optional)<input name="nationality" maxLength={100} defaultValue={user.nationality || ''} /></label>
+        <label>Date of birth (for age)<input name="dateOfBirth" type="date" required max={new Date().toISOString().slice(0,10)} autoComplete="bday" defaultValue={user.dateOfBirth || ''} /></label>
+        <label>Gender<input name="gender" required maxLength={60} defaultValue={user.gender || ''} /></label>
+        <label>Location<input name="location" required maxLength={200} defaultValue={user.location || ''} /></label>
         <label>Occupation (optional)<input name="occupation" maxLength={120} defaultValue={user.occupation || ''} /></label>
         <label>City<input name="city" maxLength={100} autoComplete="address-level2" defaultValue={user.city} /></label>
         <label>State<input name="state" maxLength={100} autoComplete="address-level1" defaultValue={user.state} /></label>
@@ -43,9 +43,10 @@ export default function ProfileDetails({ user, onChange }: { user: User; onChang
     </fieldset></form> : <dl className="profile-info">
       {[
         ['Full name',user.name], ['Email',user.email], ['Phone',user.phone],
+        ['Age',user.dateOfBirth ? String(new Date().getFullYear()-Number(user.dateOfBirth.slice(0,4))-(new Date().toISOString().slice(5,10)<user.dateOfBirth.slice(5)?1:0))+' years' : ''],
         ['Date of birth',user.dateOfBirth ? new Date(user.dateOfBirth + 'T12:00:00').toLocaleDateString('en-NG',{dateStyle:'long'}) : ''],
-        ['Gender',user.gender], ['Nationality',user.nationality], ['Occupation',user.occupation],
-        ['Location',[user.city,user.state].filter(Boolean).join(', ')], ['About you',user.bio],
+        ['Gender',user.gender], ['Location',user.location], ['Occupation',user.occupation],
+        ['City / state',[user.city,user.state].filter(Boolean).join(', ')], ['About you',user.bio],
       ].map(([label,value]) => <div key={label} className={label === 'About you' ? 'full-width' : ''}><dt>{label}</dt><dd className="preserve-lines">{value || 'Not added yet'}</dd></div>)}
     </dl>}
   </section>;

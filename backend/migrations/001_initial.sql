@@ -1,4 +1,4 @@
-﻿CREATE TABLE users (
+CREATE TABLE users (
  id uuid PRIMARY KEY, email text NOT NULL UNIQUE CHECK (email = lower(email)),
  name text NOT NULL, phone text NOT NULL DEFAULT '', password_hash text NOT NULL,
  role text NOT NULL DEFAULT 'buyer' CHECK (role IN ('buyer','seller','admin')),
@@ -36,7 +36,7 @@ CREATE TABLE cart_items (user_id uuid NOT NULL REFERENCES users(id) ON DELETE CA
 CREATE TABLE wishlists (user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, product_id uuid NOT NULL REFERENCES products(id), PRIMARY KEY(user_id,product_id));
 CREATE TABLE orders (
  id uuid PRIMARY KEY, buyer_id uuid NOT NULL REFERENCES users(id), idempotency_key uuid NOT NULL,
- payment_method text NOT NULL CHECK(payment_method IN ('cod','paystack')),
+ payment_method text NOT NULL CHECK(payment_method IN ('cod','flutterwave')),
  payment_status text NOT NULL CHECK(payment_status IN ('Unpaid','Pending','Paid','Failed','Needs Review','Cancelled')),
  status text NOT NULL CHECK(status IN ('Awaiting Payment','Confirmed','Processed','In Transit','Delivered','Cancelled')),
  subtotal_minor bigint NOT NULL CHECK(subtotal_minor>0), delivery_fee_minor bigint NOT NULL DEFAULT 0 CHECK(delivery_fee_minor>=0),

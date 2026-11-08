@@ -1,4 +1,4 @@
-﻿# Register accounts and test your first checkout
+# Register accounts and test your first checkout
 
 Use http://localhost:3000 on the development computer. Email registration also
 works at http://172.20.80.1:3000 on this local network. Google sign-in requires
@@ -31,7 +31,7 @@ After signing in, choose Administration. No new administrator registration is ne
 2. In Profile → Delivery addresses, add a delivery address with recipient name, phone, street, city, and state.
 3. Browse The pantry, add the seller's product, and open Basket.
 4. Choose the saved address and Pay on delivery, then place the order.
-   Paystack additionally needs PAYSTACK_SECRET_KEY and an order of at least NGN 50.
+   Flutterwave additionally needs SECRET_KEY and an order of at least NGN 50.
 5. Open Orders to see the saved order. Refresh or sign back in to confirm persistence.
 6. Sign in as the seller and use My store ? Fulfillment: Processed, In Transit,
    then confirm delivery and cash collection. Only confirm collection after payment.
