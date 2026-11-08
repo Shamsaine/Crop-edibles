@@ -34,7 +34,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   const response=await realFetch(base+path,{method,headers:{'Content-Type':'application/json',Origin:config.appUrl,...(account?{Cookie:account.cookie}:{}),...extra},...(body!==undefined?{body:JSON.stringify(body)}:{})});
   const json=await response.json() as any;return {status:response.status,body:json,cookie:response.headers.get('set-cookie')?.split(';')[0]||'',headers:response.headers};
  };
- const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));await pool.query('UPDATE users SET email_verified_at=now() WHERE email=$1',[email]);accounts[key]={id:result.body.user.id,email,cookie:result.cookie};assert.match(result.headers.get('set-cookie')||'',/HttpOnly/);assert.match(result.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
+ const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));assert.equal(result.body.user.emailVerified,false);assert.equal((await request('GET','/cart',undefined,{id:result.body.user.id,email,cookie:result.cookie})).status,401,'Registration must not create a usable session');await pool.query('UPDATE users SET email_verified_at=now() WHERE email=$1',[email]);const login=await request('POST','/auth/login',{email,password});assert.equal(login.status,200,JSON.stringify(login.body));accounts[key]={id:result.body.user.id,email,cookie:login.cookie};assert.match(login.headers.get('set-cookie')||'',/HttpOnly/);assert.match(login.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
  let product1:any,product2:any,address1:any,address2:any,order:any;
  try{
  await t.test('auth registration, sessions, origin protection and roles',async()=>{
@@ -59,13 +59,20 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
    process.env.NODE_ENV='production';
    try {assert.equal(isAllowedOrigin('http://127.0.0.1:3000'),false);assert.equal(isAllowedOrigin('http://172.20.80.1:3000'),true);assert.equal(isAllowedOrigin('https://attacker.example'),false);}
    finally {if(previousMode===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousMode;}
-   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',business:vendorBusiness});
-   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie};
+   const registered=await request('POST','/auth/register',{name:'New seller',email:'new-seller@example.test',password,accountType:'seller',phone:'+2348098765432',business:vendorBusiness});
+   assert.equal(registered.status,201,JSON.stringify(registered.body));assert.equal(registered.body.user.emailVerified,false);
+   await pool.query("UPDATE users SET email_verified_at=now() WHERE email=$1",['new-seller@example.test']);
+   const sellerLogin=await request('POST','/auth/login',{email:'new-seller@example.test',password});
+   accounts.pendingSeller={id:registered.body.user.id,email:'new-seller@example.test',cookie:sellerLogin.cookie};
    assert.equal((await request('GET','/seller/application',undefined,accounts.pendingSeller)).body.application.status,'Pending');
-   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller'});assert.equal(incomplete.status,400);
+   assert.equal((await pool.query('SELECT phone FROM users WHERE id=$1',[registered.body.user.id])).rows[0].phone,'+2348098765432');
+   assert.equal((await request('PATCH','/seller/application/images',{images:[]},accounts.pendingSeller)).status,200,'A verified seller can update pictures on an existing pending application');
+   const missingPhone=await request('POST','/auth/register',{name:'Missing phone seller',email:'missing-phone@example.test',password,accountType:'seller',business:vendorBusiness});assert.equal(missingPhone.status,400);
+   assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['missing-phone@example.test'])).rowCount,0,'Seller registration must require a contact phone');
+   const incomplete=await request('POST','/auth/register',{name:'Incomplete seller',email:'incomplete@example.test',password,accountType:'seller',phone:'+2348098765432'});assert.equal(incomplete.status,400);
    assert.equal((await pool.query('SELECT 1 FROM users WHERE email=$1',['incomplete@example.test'])).rowCount,0,'Invalid signup must not leave an account behind');
    assert.equal(registered.status,201);assert.equal(registered.body.user.accountType,'seller');assert.equal(registered.body.user.role,'buyer');
-   assert.equal((await request('GET','/seller/products',undefined,{id:registered.body.user.id,email:'new-seller@example.test',cookie:registered.cookie})).status,403);
+   assert.equal((await request('GET','/seller/products',undefined,accounts.pendingSeller)).status,403);
    assert.equal((await request('POST','/auth/register',{name:'Bad role',email:'bad-role@example.test',password,accountType:'admin'})).status,400);
   } finally { if(previous===undefined)delete process.env.ALLOWED_ORIGINS;else process.env.ALLOWED_ORIGINS=previous; }
  });
@@ -145,6 +152,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   assert.equal((await request('GET','/cart',undefined,accounts.buyer)).body.items.length,0);
   assert.equal((await request('GET',`/orders/${order.id}`,undefined,accounts.other)).status,404);
   const sellerOrders=(await request('GET','/seller/orders',undefined,accounts.vendor)).body.orders;assert.equal(sellerOrders[0].items.length,1);assert.equal(sellerOrders[0].totalMinor,24690);
+  assert.equal((await request('POST','/orders',{...body,deliveryPriority:'urgent'},accounts.buyer)).status,409,'An idempotency key cannot be reused with a different delivery priority');
  });
  await t.test('fulfillment ownership, explicit COD collection, reviews and disputes',async()=>{
   assert.equal((await request('POST',`/products/${product1.id}/reviews`,{rating:5,comment:'Great'},accounts.buyer)).status,403);
@@ -232,9 +240,10 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   }) as typeof fetch;
   assert.equal((await request('GET','/config')).body.payments.flutterwave,true);
   await request('PUT',`/cart/${product1.id}`,{quantity:1},accounts.buyer);
-  const checkout=await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',idempotencyKey:randomUUID()},accounts.buyer);assert.equal(checkout.status,201,JSON.stringify(checkout.body));assert.equal(checkout.body.order.paymentStatus,'Pending');assert.match(checkout.body.authorizationUrl,/^https:\/\/checkout-v2.dev-flutterwave.com\//);
+  const checkout=await request('POST','/orders',{addressId:address1.id,paymentMethod:'flutterwave',deliveryPriority:'urgent',idempotencyKey:randomUUID()},accounts.buyer);assert.equal(checkout.status,201,JSON.stringify(checkout.body));assert.equal(checkout.body.order.paymentStatus,'Pending');assert.equal(checkout.body.order.deliveryPriority,'urgent');assert.equal(checkout.body.order.deliveryFeeMinor,50000);assert.equal(checkout.body.order.totalMinor,checkout.body.order.subtotalMinor+50000);assert.match(checkout.body.authorizationUrl,/^https:\/\/checkout-v2.dev-flutterwave.com\//);
   checkoutHost='checkout.flutterwave.com';
   const onlineOrder=checkout.body.order;const reference=onlineOrder.paymentReference;
+  assert.equal(Number((await pool.query('SELECT amount_minor FROM payments WHERE order_id=$1',[onlineOrder.id])).rows[0].amount_minor),onlineOrder.totalMinor,'The online payment snapshot includes the urgent delivery fee');
   assert.equal((await request('PATCH',`/seller/order-items/${onlineOrder.items[0].id}`,{status:'Processed'},accounts.vendor)).status,409);
   assert.equal((await request('POST','/payments/verify',{reference},accounts.other)).status,404);
   assert.equal((await request('POST','/payments/verify',{reference},accounts.buyer)).body.order.paymentStatus,'Pending');

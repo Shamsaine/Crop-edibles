@@ -5,7 +5,7 @@ import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
 import PasswordRecovery from './components/PasswordRecovery';
-import EmailVerification, { EmailVerificationBanner } from './components/EmailVerification';
+import EmailVerification, { EmailVerificationBanner, EmailVerificationPending } from './components/EmailVerification';
 import SiteFooter from './components/SiteFooter';
 import { siteContent } from './siteContent';
 import { ProductDetail, ProductGrid } from './components/Catalog';
@@ -115,6 +115,7 @@ export default function App() {
     {sessionLoading ? <AuthLayout><div className="auth-panel"><Loading /></div></AuthLayout>
       : sessionError && !user ? <AuthLayout><div className="auth-panel"><Feedback error={sessionError} />{connectionError}</div></AuthLayout>
       : page.startsWith('auth/reset') ? <AuthLayout><PasswordRecovery token={new URLSearchParams(page.split('?')[1]||'').get('token')||''} onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
+      : page === 'auth/verify/resend' ? <AuthLayout><EmailVerificationPending onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : page.startsWith('auth/verify') ? <AuthLayout><EmailVerification token={new URLSearchParams(page.split('?')[1]||'').get('token')||''} onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : page === 'auth/forgot' ? <AuthLayout><PasswordRecovery onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : <AuthScreen onSuccess={onAuthSuccess} notice={paymentReference ? 'Sign in to the account you used at checkout to verify your payment.' : undefined} />}

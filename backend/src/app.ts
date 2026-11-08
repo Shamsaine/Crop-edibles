@@ -3,7 +3,7 @@ import { cancelOrder } from './order-cancellation.js';
 import { passwordRecoveryRouter } from './password-recovery.js';
 import { emailVerificationRouter } from './email-verification.js';
 import { issueVerification } from './email-verification.js';
-import { imagesRouter, checkImageOwnership } from './images.js';
+import { imagesRouter, checkImageOwnership, localImagePattern } from './images.js';
 import { productSchema, imageFields, createProducts } from './product-write.js';
 import { businessSchema, submitStoreApplication } from './vendors.js';
 import { ticketsRouter, listTickets, changeTicket } from './tickets.js';
@@ -48,22 +48,23 @@ app.use('/api',(req,_res,next)=>{
  next();
 });
 app.get('/api/health',route(async(_req,res)=>{await pool.query('SELECT 1');res.json({status:'ok'});}));
-app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,payments:{cod:true,flutterwave:!!config.flutterwaveSecretKey},googleClientId:config.googleClientId}));
+app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,urgentDeliveryFeeMinor:config.urgentDeliveryFeeMinor,payments:{cod:true,flutterwave:!!config.flutterwaveSecretKey},googleClientId:config.googleClientId}));
 app.use('/api',sessionMiddleware);
 app.use('/api',imagesRouter);
 app.use('/api',passwordRecoveryRouter);
 app.use('/api',emailVerificationRouter);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
- const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
+ const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),phone:z.string().trim().min(7).max(30).optional(),business:businessSchema.optional()}).strict().superRefine((value,ctx)=>{if(value.accountType==='seller'&&!value.phone)ctx.addIssue({code:'custom',path:['phone'],message:'A seller phone number is required.'});}).parse(req.body);
  if(body.accountType==='seller'&&!body.business)throw new HttpError(400,'Complete your business information to register as a vendor.');
  if(body.accountType==='buyer'&&body.business)throw new HttpError(400,'Buyer registration does not require business information. Apply for a store from your profile later.');
  if(!config.smtpHost||!config.smtpUser||!config.smtpPassword||!config.emailFrom)throw new HttpError(503,'Email verification is temporarily unavailable. Please try again later.');
+ const oldToken=cookieToken(req);if(oldToken)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
  const user=await transaction(async db=>{
-  const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type,email_verified_at) VALUES($1,$2,$3,$4,$5,NULL) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
+  const {rows}=await db.query('INSERT INTO users(id,email,name,phone,password_hash,account_type,email_verified_at) VALUES($1,$2,$3,$4,$5,$6,NULL) RETURNING *',[randomUUID(),body.email,body.name,body.phone||'',await hashPassword(body.password),body.accountType]);
   if(body.business)await submitStoreApplication(db,rows[0].id,body.business);
-  await createSession(rows[0].id,res,db);return userJSON(rows[0]);
- });await issueVerification(user.id,user.email);res.status(201).json({user,verificationRequired:true});
+  return userJSON(rows[0]);
+ });clearSession(res);await issueVerification(user.id,user.email);res.status(201).json({user,verificationRequired:true});
 }));
 app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  const body=z.object({email:emailSchema,password:z.string().max(128)}).strict().parse(req.body);
@@ -179,14 +180,14 @@ app.delete('/api/addresses/:id',requireUser,route(async(req,res)=>{const result=
 app.get('/api/orders',requireUser,route(async(req,res)=>{res.json({orders:await orders('o.buyer_id=$1',[req.user!.id])});}));
 app.get('/api/orders/:id',requireUser,route(async(req,res)=>{const order=(await orders('o.id=$1 AND o.buyer_id=$2',[id(req.params.id),req.user!.id]))[0];if(!order)throw new HttpError(404,'Order not found.');res.json({order});}));
 app.post('/api/orders',requireUser,route(async(req,res)=>{
- const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','flutterwave']),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
+ const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','flutterwave']),deliveryPriority:z.enum(['normal','urgent']).default('normal'),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
  if(body.paymentMethod==='flutterwave'&&!config.flutterwaveSecretKey)throw new HttpError(503,'Flutterwave is not configured. Choose pay on delivery.');
  const orderId=await transaction(async db=>{
  // Serialize checkout with account suspension and cart changes.
  const buyer=await db.query('SELECT status FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
  if(buyer.rows[0]?.status!=='active')throw new HttpError(403,'Account is unavailable.');
- const prior=await db.query('SELECT id,payment_method,address FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
- if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
+ const prior=await db.query('SELECT id,payment_method,address,delivery_priority FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
+ if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId||prior.rows[0].delivery_priority!==body.deliveryPriority)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
  const address=await db.query('SELECT * FROM addresses WHERE id=$1 AND user_id=$2',[body.addressId,req.user!.id]);if(!address.rows[0])throw new HttpError(400,'Choose one of your saved delivery addresses.');
  const {rows:items}=await db.query(`SELECT p.*,${sellingPriceSql} selling_price_minor,c.quantity,a.status seller_status,owner.status seller_account_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c`,[req.user!.id]);
  if(!items.length)throw new HttpError(400,'Your basket is empty.');
@@ -194,12 +195,14 @@ app.post('/api/orders',requireUser,route(async(req,res)=>{
  for(const item of items){if(!item.active||item.admin_delisted||item.seller_account_status!=='active'||item.seller_status!=='Approved'||item.stock<item.quantity||item.seller_id===req.user!.id)throw new HttpError(409,`${item.name} is unavailable in the requested quantity. Please update your basket.`);}
  const subtotal=items.reduce((total,item)=>total+Number(item.selling_price_minor)*item.quantity,0);
  if(body.expectedSubtotalMinor!==undefined&&subtotal!==body.expectedSubtotalMinor)throw new HttpError(409,'A product price or promotion has changed. Review the refreshed basket total and place your order again.');
- if(subtotal>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
- if(body.paymentMethod==='flutterwave'&&subtotal<5000)throw new HttpError(400,'Online orders must total at least NGN 50.');
+ const deliveryFee=body.deliveryPriority==='urgent'?config.urgentDeliveryFeeMinor:0;
+ const total=subtotal+deliveryFee;
+ if(total>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
+ if(body.paymentMethod==='flutterwave'&&total<5000)throw new HttpError(400,'Online orders must total at least NGN 50.');
  const newId=randomUUID();const status=body.paymentMethod==='cod'?'Confirmed':'Awaiting Payment';
- await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,total_minor,address) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,JSON.stringify(addressJSON(address.rows[0]))]);
+ await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,delivery_fee_minor,total_minor,delivery_priority,address) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,deliveryFee,total,body.deliveryPriority,JSON.stringify(addressJSON(address.rows[0]))]);
  for(const item of items){await db.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1',[item.id,item.quantity]);await db.query('INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[randomUUID(),newId,item.id,item.seller_id,item.name,item.image,item.unit,item.quantity,item.selling_price_minor,Number(item.selling_price_minor)*item.quantity,status]);}
- if(body.paymentMethod==='flutterwave')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,subtotal]);
+ if(body.paymentMethod==='flutterwave')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,total]);
  await db.query('DELETE FROM cart_items WHERE user_id=$1',[req.user!.id]);return newId;
  });
  if(body.paymentMethod==='flutterwave')res.status(201).json(await initializePayment(orderId,req.user!.email));
@@ -224,6 +227,13 @@ app.post('/api/seller/application',requireUser,route(async(req,res)=>{
  const body=businessSchema.parse(req.body);
  await transaction(db=>submitStoreApplication(db,req.user!.id,body));
  res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
+}));
+app.patch('/api/seller/application/images',requireUser,route(async(req,res)=>{
+ const {images}=z.object({images:z.array(z.string().regex(localImagePattern)).max(6)}).strict().parse(req.body);
+ await checkImageOwnership(images,req.user!.id,'store');
+ const updated=await pool.query("UPDATE seller_applications SET images=$2,updated_at=now() WHERE user_id=$1 AND status IN ('Pending','Approved') RETURNING id",[req.user!.id,images]);
+ if(!updated.rowCount)throw new HttpError(404,'An active store application was not found.');
+ res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
 }));
 app.get('/api/seller/products',role('seller'),route(async(req,res)=>res.json({products:await products('p.seller_id=$1',[req.user!.id])})));
 app.post('/api/seller/products/batch',role('seller'),route(async(req,res)=>{
