@@ -1,5 +1,5 @@
 export type UserRole = 'buyer' | 'seller' | 'admin';
-export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; profileImage: string; dateOfBirth: string; gender: string; location: string; occupation: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
+export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; profileImage: string; dateOfBirth: string; gender: string; location: string; occupation: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean; emailVerified: boolean }
 export const CATEGORIES = ['Snacks', 'Oils', 'Spices', 'Grains'] as const;
 export interface Product {
   id: string; sellerId: string; name: string; description: string; category: typeof CATEGORIES[number];
