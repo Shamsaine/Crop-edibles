@@ -20,7 +20,7 @@ export interface OrderItem {
 }
 export interface Order {
   cancellationTicketId?: string;
-  id: string; createdAt: string; status: OrderStatus; paymentMethod: 'cod' | 'flutterwave'; paymentProvider?: 'flutterwave' | 'legacy'; paymentStatus: string;
+  id: string; createdAt: string; status: OrderStatus; paymentMethod: 'cod' | 'flutterwave'; paymentProvider?: 'flutterwave' | 'legacy'; paymentStatus: string; deliveryPriority: 'normal' | 'urgent';
   subtotalMinor: number; deliveryFeeMinor: number; totalMinor: number; address: Address; items: OrderItem[];
   paymentReference?: string;
 }
@@ -40,4 +40,4 @@ export interface SupportTicket {
  events:{id:string;actorId:string|null;actorName:string;actorRole:string|null;action:string;note:string;createdAt:string}[];
 }
 export type Dispute = SupportTicket;
-export interface ShopConfig { googleClientId: string; currency: string; deliveryFeeMinor: number; payments: { cod: boolean; flutterwave: boolean } }
+export interface ShopConfig { googleClientId: string; currency: string; deliveryFeeMinor: number; urgentDeliveryFeeMinor: number; payments: { cod: boolean; flutterwave: boolean } }

@@ -6,6 +6,7 @@ dotenv.config({ path: fileURLToPath(new URL('../../.env', import.meta.url)), qui
 export const config = {
   port: Number(process.env.PORT || 4000),
   appUrl: (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
+  urgentDeliveryFeeMinor: 50000,
   secureCookie: process.env.NODE_ENV === 'production' || process.env.SESSION_COOKIE_SECURE === 'true',
   flutterwavePublicKey: (process.env.PUBLIC_KEY || '').trim(),
   flutterwaveSecretKey: (process.env.SECRET_KEY || '').trim(),
@@ -37,4 +38,3 @@ export async function transaction<T>(fn: (db: pg.PoolClient) => Promise<T>): Pro
   catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
-

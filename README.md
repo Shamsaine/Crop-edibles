@@ -32,10 +32,14 @@ administrator access, first-product setup, Google sign-in, and local origin sett
 The demo catalog, orders, identities, payment screens, and dashboard figures
 have been removed. No fictitious transactions or default user passwords are seeded.
 
-Register an account, submit a seller application, and have a provisioned admin
-approve it. The approved seller can add products. A buyer can save products,
-add items to the basket, save a delivery address, place an order, and follow its
-progress. Seller fulfillment, buyer reviews, and dispute messages are persisted.
+Register an account, verify its email before signing in, submit a seller
+application, and have a provisioned admin approve it. Seller registration
+requires a personal contact phone; store pictures can be added from the account
+after verification. The approved seller can add products. A buyer can save
+products, add items to the basket, save a delivery address, place an order, and
+follow its progress. Standard delivery is expected within two days; buyers can
+request urgent delivery for an additional ₦500, subject to seller availability.
+Seller fulfillment, buyer reviews, and dispute messages are persisted.
 The initial administrator credentials in this working copy are the ADMIN_EMAIL
 and ADMIN_PASSWORD values in the ignored root .env. Sign in with them
 and change the password from Account. On a fresh database, set ADMIN_EMAIL,
@@ -105,10 +109,11 @@ acknowledgement. No reset tokens are exposed in API responses or logs.
 
 New email/password accounts receive a single-use verification link by email.
 The link expires after 24 hours and must be opened before password sign-in is
-allowed. Use the verification page to confirm the address, or use its resend
-action when needed. Google accounts are considered verified by the server after
-Google's verified-email identity check. Existing accounts are preserved as
-verified when the verification migration is applied.
+allowed; registration does not create a usable session. Use the verification
+page to confirm the address, or use its resend action when needed. Google
+accounts are considered verified by the server after Google's verified-email
+identity check. Existing accounts are preserved as verified when the
+verification migration is applied.
 
 ## Development and validation
 

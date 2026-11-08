@@ -15,9 +15,9 @@ test('normal account email verification', { timeout: 120000 }, async t => {
   const oldSettings={smtpHost:config.smtpHost,smtpUser:config.smtpUser,smtpPassword:config.smtpPassword,emailFrom:config.emailFrom};
   const oldSend=mailer.sendEmailVerification;
   const email='verify@example.test'; const password='Verify-password-42';
-  const json=async(path:string,body:unknown)=>{
-    const response=await fetch(base+path,{method:'POST',headers:{Origin:config.appUrl,'Content-Type':'application/json'},body:JSON.stringify(body)});
-    return {status:response.status,body:await response.json() as any};
+  const json=async(path:string,body:unknown,method='POST',cookie='')=>{
+    const response=await fetch(base+path,{method,headers:{Origin:config.appUrl,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(method==='GET'?{}:{body:JSON.stringify(body)})});
+    return {status:response.status,body:await response.json() as any,cookie:response.headers.get('set-cookie')?.split(';')[0]||''};
   };
   try {
     await pool.query(`CREATE SCHEMA ${schema}`); await migrate();
@@ -31,6 +31,7 @@ test('normal account email verification', { timeout: 120000 }, async t => {
       assert.equal(messages.length,1); assert.equal(messages[0].email,email);
       assert.match(messages[0].link,/\/#auth\/verify\?token=[a-f0-9]{64}$/);
       assert.equal(result.body.user.emailVerified,false);
+      assert.equal((await json('/cart',{},'GET',result.cookie)).status,401,'Registration must not create a usable session');
       assert.equal((await json('/auth/login',{email,password})).status,403);
     });
     const token=new URLSearchParams(messages[0].link.split('?')[1]).get('token')!;
