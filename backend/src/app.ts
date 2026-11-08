@@ -1,5 +1,9 @@
 import express from 'express';
-import { imagesRouter, checkImageOwnership } from './images.js';
+import { cancelOrder } from './order-cancellation.js';
+import { passwordRecoveryRouter } from './password-recovery.js';
+import { emailVerificationRouter } from './email-verification.js';
+import { issueVerification } from './email-verification.js';
+import { imagesRouter, checkImageOwnership, localImagePattern } from './images.js';
 import { productSchema, imageFields, createProducts } from './product-write.js';
 import { businessSchema, submitStoreApplication } from './vendors.js';
 import { ticketsRouter, listTickets, changeTicket } from './tickets.js';
@@ -13,19 +17,22 @@ import { z } from 'zod';
 import { pool, transaction, config } from './db.js';
 import { route, id, required, passwordSchema, emailSchema, HttpError, hashPassword, verifyPassword, userJSON, sessionMiddleware, requireUser, role, authLimit, createSession, cookieToken, tokenHash, clearSession, errors } from './auth.js';
 import { products, cart, addressJSON, orders, applications, disputes } from './views.js';
-import { initializePayment, verifyPayment, applyPayment, releaseStock } from './payments.js';
+import { initializePayment, changePaymentMethod, verifyPayment, verifyWebhookPayment } from './payments.js';
 
 export const app=express();
 app.disable('x-powered-by');
 app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');next();});
 app.post('/api/payments/webhook',express.raw({type:'application/json',limit:'256kb'}),route(async(req,res)=>{
- if(!config.paystackKey)throw new HttpError(503,'Paystack is not configured.');
- const signature=req.headers['x-paystack-signature'];
- if(typeof signature!=='string' || !/^[a-f0-9]{128}$/i.test(signature) || !Buffer.isBuffer(req.body))throw new HttpError(401,'Invalid webhook signature.');
- const expected=createHmac('sha512',config.paystackKey).update(req.body).digest();
- if(!timingSafeEqual(expected,Buffer.from(signature,'hex')))throw new HttpError(401,'Invalid webhook signature.');
+ if(!config.flutterwaveWebhookSecret)throw new HttpError(503,'Flutterwave webhook authentication is not configured.');
+ if(!Buffer.isBuffer(req.body))throw new HttpError(401,'Invalid webhook signature.');
+ const signed=req.headers['flutterwave-signature'];
+ const signature=signed??req.headers['verif-hash'];
+ if(typeof signature!=='string')throw new HttpError(401,'Invalid webhook signature.');
+ const expected=signed!==undefined?createHmac('sha256',config.flutterwaveWebhookSecret).update(req.body).digest('base64'):config.flutterwaveWebhookSecret;
+ const actualBuffer=Buffer.from(signature);const expectedBuffer=Buffer.from(expected);
+ if(actualBuffer.length!==expectedBuffer.length||!timingSafeEqual(actualBuffer,expectedBuffer))throw new HttpError(401,'Invalid webhook signature.');
  let event:any;try{event=JSON.parse(req.body.toString('utf8'));}catch{throw new HttpError(400,'Invalid webhook JSON.');}
- if(event.event==='charge.success'&&event.data?.status==='success')await applyPayment(event.data);
+ if(event.event==='charge.completed')await verifyWebhookPayment(event.data?.id,event.data?.tx_ref);
  res.json({received:true});
 }));
 // A batch can contain twenty full descriptions and six image links per product.
@@ -37,23 +44,27 @@ app.use('/api',(req,_res,next)=>{
  // Non-browser clients may omit Origin; browsers cannot forge or suppress it on cross-origin JSON writes.
  if(origin!==undefined && !isAllowedOrigin(origin))return next(new HttpError(403,'This browser address is not allowed. Open '+config.appUrl+' or add your frontend origin to ALLOWED_ORIGINS and restart the API.'));
  if(req.headers['sec-fetch-site']==='cross-site')return next(new HttpError(403,'Cross-site requests are not allowed.'));
- if(!/^\/uploads\/(product|profile)$/.test(req.path) && req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
+ if(!/^\/uploads\/(product|profile|store)$/.test(req.path) && req.headers['content-type'] && req.headers['content-type'].split(';')[0].trim().toLowerCase()!=='application/json')return next(new HttpError(415,'Use application/json.'));
  next();
 });
 app.get('/api/health',route(async(_req,res)=>{await pool.query('SELECT 1');res.json({status:'ok'});}));
-app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,payments:{cod:true,paystack:!!config.paystackKey},googleClientId:config.googleClientId}));
+app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,urgentDeliveryFeeMinor:config.urgentDeliveryFeeMinor,payments:{cod:true,flutterwave:!!config.flutterwaveSecretKey},googleClientId:config.googleClientId}));
 app.use('/api',sessionMiddleware);
 app.use('/api',imagesRouter);
+app.use('/api',passwordRecoveryRouter);
+app.use('/api',emailVerificationRouter);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
- const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
+ const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),phone:z.string().trim().min(7).max(30).optional(),business:businessSchema.optional()}).strict().superRefine((value,ctx)=>{if(value.accountType==='seller'&&!value.phone)ctx.addIssue({code:'custom',path:['phone'],message:'A seller phone number is required.'});}).parse(req.body);
  if(body.accountType==='seller'&&!body.business)throw new HttpError(400,'Complete your business information to register as a vendor.');
  if(body.accountType==='buyer'&&body.business)throw new HttpError(400,'Buyer registration does not require business information. Apply for a store from your profile later.');
+ if(!config.smtpHost||!config.smtpUser||!config.smtpPassword||!config.emailFrom)throw new HttpError(503,'Email verification is temporarily unavailable. Please try again later.');
+ const oldToken=cookieToken(req);if(oldToken)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
  const user=await transaction(async db=>{
-  const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type) VALUES($1,$2,$3,$4,$5) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
+  const {rows}=await db.query('INSERT INTO users(id,email,name,phone,password_hash,account_type,email_verified_at) VALUES($1,$2,$3,$4,$5,$6,NULL) RETURNING *',[randomUUID(),body.email,body.name,body.phone||'',await hashPassword(body.password),body.accountType]);
   if(body.business)await submitStoreApplication(db,rows[0].id,body.business);
-  await createSession(rows[0].id,res,db);return userJSON(rows[0]);
- });res.status(201).json({user});
+  return userJSON(rows[0]);
+ });clearSession(res);await issueVerification(user.id,user.email);res.status(201).json({user,verificationRequired:true});
 }));
 app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  const body=z.object({email:emailSchema,password:z.string().max(128)}).strict().parse(req.body);
@@ -61,6 +72,7 @@ app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  const row=rows[0];
  if(!row || !row.password_hash){await hashPassword(body.password);throw new HttpError(401,'Email or password is incorrect.');}
  if(!await verifyPassword(body.password,row.password_hash))throw new HttpError(401,'Email or password is incorrect.');
+ if(!row.email_verified_at)throw new HttpError(403,'Please verify your email address before signing in. Check your inbox or request a new verification link.');
  const oldToken=cookieToken(req);if(oldToken)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
  if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
  await createSession(row.id,res);res.json({user:userJSON(row)});
@@ -75,7 +87,7 @@ app.post('/api/auth/google',authLimit,route(async(req,res)=>{
   if(!row){
    const existing=await db.query('SELECT id FROM users WHERE email=$1',[identity.email]);
    if(existing.rowCount)throw new HttpError(409,'An account already uses this email. Sign in with your password, then connect Google from Account.');
-   const created=await db.query('INSERT INTO users(id,email,name,password_hash,google_subject,account_type) VALUES($1,$2,$3,NULL,$4,$5) RETURNING *',[randomUUID(),identity.email,identity.name,identity.sub,body.accountType]);row=created.rows[0];
+   const created=await db.query('INSERT INTO users(id,email,name,password_hash,google_subject,account_type,email_verified_at) VALUES($1,$2,$3,NULL,$4,$5,now()) RETURNING *',[randomUUID(),identity.email,identity.name,identity.sub,body.accountType]);row=created.rows[0];
   }
   if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
   const oldToken=cookieToken(req);if(oldToken)await db.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
@@ -94,7 +106,7 @@ app.post('/api/account/google',requireUser,authLimit,route(async(req,res)=>{
 }));
 app.post('/api/auth/logout',route(async(req,res)=>{const token=cookieToken(req);if(token)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(token)]);clearSession(res);res.json({ok:true});}));
 app.patch('/api/account',requireUser,route(async(req,res)=>{
- const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000),profileImage:z.union([z.literal(''),z.string().regex(/^\/api\/images\/[0-9a-f-]{36}$/)]),dateOfBirth:z.union([z.literal(''),z.iso.date().refine(value=>value<=new Date().toISOString().slice(0,10),'Date of birth cannot be in the future.')]),gender:z.string().trim().max(60),nationality:z.string().trim().max(100),occupation:z.string().trim().max(120)}).partial().strict().parse(req.body);
+ const body=z.object({name:required(120),phone:z.string().trim().max(30),city:z.string().trim().max(100),state:z.string().trim().max(100),bio:z.string().trim().max(1000),profileImage:z.union([z.literal(''),z.string().regex(/^\/api\/images\/[0-9a-f-]{36}$/)]),dateOfBirth:z.iso.date().refine(value=>value<=new Date().toISOString().slice(0,10),'Date of birth cannot be in the future.'),gender:required(60),location:required(200),occupation:z.string().trim().max(120)}).partial().strict().parse(req.body);
  if(body.profileImage)await checkImageOwnership([body.profileImage],req.user!.id,'profile');
  if(!Object.keys(body).length)throw new HttpError(400,'No profile changes provided.');
  const mapping:Record<string,string>={profileImage:"profile_image",dateOfBirth:"date_of_birth"}; const values:unknown[]=[req.user!.id];const assignments=Object.entries(body).map(([key,value])=>{values.push(value);return `${mapping[key]||key}=$${values.length}`;});
@@ -108,8 +120,15 @@ app.post('/api/account/password',requireUser,authLimit,route(async(req,res)=>{
  if(!rows[0].password_hash)throw new HttpError(400,'This account signs in with Google. Manage your Google password in your Google account.');
  if(!await verifyPassword(body.currentPassword,rows[0].password_hash))throw new HttpError(400,'Current password is incorrect.');
  await db.query('UPDATE users SET password_hash=$2 WHERE id=$1',[req.user!.id,await hashPassword(body.password)]);
+  await db.query('UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[req.user!.id]);
  await db.query('DELETE FROM sessions WHERE user_id=$1',[req.user!.id]);await createSession(req.user!.id,res,db);
  });res.json({ok:true});
+}));
+app.get('/api/stores/:id',route(async(req,res)=>{
+ const sellerId=id(req.params.id);
+ const {rows}=await pool.query("SELECT a.business_name,a.business_registration_number,a.category,a.location,a.description,a.images FROM seller_applications a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.status='Approved' AND u.status='active' AND u.role='seller'",[sellerId]);
+ if(!rows[0])throw new HttpError(404,'Store not found.');const row=rows[0];
+ res.json({store:{businessName:row.business_name,businessRegistrationNumber:row.business_registration_number,category:row.category,location:row.location,description:row.description,images:row.images},products:await products("p.seller_id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[sellerId])});
 }));
 app.get('/api/products',catalogue);
 app.get('/api/products/:id',route(async(req,res)=>{const product=(await products("p.id=$1 AND p.active AND NOT p.admin_delisted AND seller.status='active'",[id(req.params.id)]))[0];if(!product)throw new HttpError(404,'Product not found.');res.json({product});}));
@@ -161,14 +180,14 @@ app.delete('/api/addresses/:id',requireUser,route(async(req,res)=>{const result=
 app.get('/api/orders',requireUser,route(async(req,res)=>{res.json({orders:await orders('o.buyer_id=$1',[req.user!.id])});}));
 app.get('/api/orders/:id',requireUser,route(async(req,res)=>{const order=(await orders('o.id=$1 AND o.buyer_id=$2',[id(req.params.id),req.user!.id]))[0];if(!order)throw new HttpError(404,'Order not found.');res.json({order});}));
 app.post('/api/orders',requireUser,route(async(req,res)=>{
- const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','paystack']),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
- if(body.paymentMethod==='paystack'&&!config.paystackKey)throw new HttpError(503,'Paystack is not configured. Choose pay on delivery.');
+ const body=z.object({addressId:z.string().uuid(),paymentMethod:z.enum(['cod','flutterwave']),deliveryPriority:z.enum(['normal','urgent']).default('normal'),idempotencyKey:z.string().uuid(),expectedSubtotalMinor:z.number().int().nonnegative().max(1000000000).optional()}).strict().parse(req.body);
+ if(body.paymentMethod==='flutterwave'&&!config.flutterwaveSecretKey)throw new HttpError(503,'Flutterwave is not configured. Choose pay on delivery.');
  const orderId=await transaction(async db=>{
  // Serialize checkout with account suspension and cart changes.
  const buyer=await db.query('SELECT status FROM users WHERE id=$1 FOR UPDATE',[req.user!.id]);
  if(buyer.rows[0]?.status!=='active')throw new HttpError(403,'Account is unavailable.');
- const prior=await db.query('SELECT id,payment_method,address FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
- if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
+ const prior=await db.query('SELECT id,payment_method,address,delivery_priority FROM orders WHERE buyer_id=$1 AND idempotency_key=$2',[req.user!.id,body.idempotencyKey]);
+ if(prior.rows[0]){if(prior.rows[0].payment_method!==body.paymentMethod||prior.rows[0].address.id!==body.addressId||prior.rows[0].delivery_priority!==body.deliveryPriority)throw new HttpError(409,'This checkout key was used with different details.');return prior.rows[0].id as string;}
  const address=await db.query('SELECT * FROM addresses WHERE id=$1 AND user_id=$2',[body.addressId,req.user!.id]);if(!address.rows[0])throw new HttpError(400,'Choose one of your saved delivery addresses.');
  const {rows:items}=await db.query(`SELECT p.*,${sellingPriceSql} selling_price_minor,c.quantity,a.status seller_status,owner.status seller_account_status FROM cart_items c JOIN products p ON p.id=c.product_id JOIN users owner ON owner.id=p.seller_id JOIN seller_applications a ON a.user_id=p.seller_id WHERE c.user_id=$1 ORDER BY p.id FOR UPDATE OF p,c`,[req.user!.id]);
  if(!items.length)throw new HttpError(400,'Your basket is empty.');
@@ -176,38 +195,45 @@ app.post('/api/orders',requireUser,route(async(req,res)=>{
  for(const item of items){if(!item.active||item.admin_delisted||item.seller_account_status!=='active'||item.seller_status!=='Approved'||item.stock<item.quantity||item.seller_id===req.user!.id)throw new HttpError(409,`${item.name} is unavailable in the requested quantity. Please update your basket.`);}
  const subtotal=items.reduce((total,item)=>total+Number(item.selling_price_minor)*item.quantity,0);
  if(body.expectedSubtotalMinor!==undefined&&subtotal!==body.expectedSubtotalMinor)throw new HttpError(409,'A product price or promotion has changed. Review the refreshed basket total and place your order again.');
- if(subtotal>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
- if(body.paymentMethod==='paystack'&&subtotal<5000)throw new HttpError(400,'Paystack orders must total at least NGN 50.');
+ const deliveryFee=body.deliveryPriority==='urgent'?config.urgentDeliveryFeeMinor:0;
+ const total=subtotal+deliveryFee;
+ if(total>1000000000)throw new HttpError(400,'Order total exceeds the checkout limit.');
+ if(body.paymentMethod==='flutterwave'&&total<5000)throw new HttpError(400,'Online orders must total at least NGN 50.');
  const newId=randomUUID();const status=body.paymentMethod==='cod'?'Confirmed':'Awaiting Payment';
- await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,total_minor,address) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,JSON.stringify(addressJSON(address.rows[0]))]);
+ await db.query('INSERT INTO orders(id,buyer_id,idempotency_key,payment_method,payment_status,status,subtotal_minor,delivery_fee_minor,total_minor,delivery_priority,address) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[newId,req.user!.id,body.idempotencyKey,body.paymentMethod,body.paymentMethod==='cod'?'Unpaid':'Pending',status,subtotal,deliveryFee,total,body.deliveryPriority,JSON.stringify(addressJSON(address.rows[0]))]);
  for(const item of items){await db.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1',[item.id,item.quantity]);await db.query('INSERT INTO order_items(id,order_id,product_id,seller_id,product_name,product_image,unit,quantity,unit_price_minor,total_minor,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[randomUUID(),newId,item.id,item.seller_id,item.name,item.image,item.unit,item.quantity,item.selling_price_minor,Number(item.selling_price_minor)*item.quantity,status]);}
- if(body.paymentMethod==='paystack')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,subtotal]);
+ if(body.paymentMethod==='flutterwave')await db.query('INSERT INTO payments(id,order_id,reference,amount_minor) VALUES($1,$2,$3,$4)',[randomUUID(),newId,`edible_${randomUUID().replaceAll('-','')}`,total]);
  await db.query('DELETE FROM cart_items WHERE user_id=$1',[req.user!.id]);return newId;
  });
- if(body.paymentMethod==='paystack')res.status(201).json(await initializePayment(orderId,req.user!.email));
+ if(body.paymentMethod==='flutterwave')res.status(201).json(await initializePayment(orderId,req.user!.email));
  else res.status(201).json({order:(await orders('o.id=$1',[orderId]))[0]});
 }));
 app.post('/api/orders/:id/payment',requireUser,route(async(req,res)=>{
- const orderId=id(req.params.id);const found=await pool.query("SELECT 1 FROM orders WHERE id=$1 AND buyer_id=$2 AND payment_method='paystack'",[orderId,req.user!.id]);if(!found.rowCount)throw new HttpError(404,'Order not found.');res.json(await initializePayment(orderId,req.user!.email));
+ const orderId=id(req.params.id);const found=await pool.query("SELECT 1 FROM orders WHERE id=$1 AND buyer_id=$2 AND payment_method='flutterwave'",[orderId,req.user!.id]);if(!found.rowCount)throw new HttpError(404,'Order not found.');res.json(await initializePayment(orderId,req.user!.email));
 }));
 app.post('/api/payments/verify',requireUser,route(async(req,res)=>{
  const {reference}=z.object({reference:required(100)}).strict().parse(req.body);
  const found=await pool.query('SELECT o.id FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.reference=$1 AND o.buyer_id=$2',[reference,req.user!.id]);if(!found.rows[0])throw new HttpError(404,'Payment not found.');await verifyPayment(reference);res.json({order:(await orders('o.id=$1',[found.rows[0].id]))[0]});
 }));
+app.patch('/api/orders/:id/payment-method',requireUser,route(async(req,res)=>{
+ z.object({paymentMethod:z.literal('cod')}).strict().parse(req.body);
+ res.json(await changePaymentMethod(id(req.params.id),req.user!.id));
+}));
 app.post('/api/orders/:id/cancel',requireUser,route(async(req,res)=>{
- const orderId=id(req.params.id);
- await transaction(async db=>{
- const {rows}=await db.query('SELECT * FROM orders WHERE id=$1 AND buyer_id=$2 FOR UPDATE',[orderId,req.user!.id]);const order=rows[0];if(!order)throw new HttpError(404,'Order not found.');if(order.status==='Cancelled')return;
- if(order.payment_method!=='cod')throw new HttpError(409,'Online payment orders must be verified before cancellation. Open a support case if assistance is needed.');
- const started=await db.query("SELECT 1 FROM order_items WHERE order_id=$1 AND status<>'Confirmed'",[orderId]);if(started.rowCount)throw new HttpError(409,'Fulfillment has started. Open a support case for this order.');
- await releaseStock(db,orderId);await db.query("UPDATE orders SET status='Cancelled',payment_status='Cancelled',updated_at=now() WHERE id=$1",[orderId]);await db.query("UPDATE order_items SET status='Cancelled' WHERE order_id=$1",[orderId]);
- });res.json({order:(await orders('o.id=$1',[orderId]))[0]});
+ res.json(await cancelOrder(id(req.params.id),req.user!.id));
 }));
 app.get('/api/seller/application',requireUser,route(async(req,res)=>res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]||null})));
 app.post('/api/seller/application',requireUser,route(async(req,res)=>{
  const body=businessSchema.parse(req.body);
  await transaction(db=>submitStoreApplication(db,req.user!.id,body));
  res.status(201).json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
+}));
+app.patch('/api/seller/application/images',requireUser,route(async(req,res)=>{
+ const {images}=z.object({images:z.array(z.string().regex(localImagePattern)).max(6)}).strict().parse(req.body);
+ await checkImageOwnership(images,req.user!.id,'store');
+ const updated=await pool.query("UPDATE seller_applications SET images=$2,updated_at=now() WHERE user_id=$1 AND status IN ('Pending','Approved') RETURNING id",[req.user!.id,images]);
+ if(!updated.rowCount)throw new HttpError(404,'An active store application was not found.');
+ res.json({application:(await applications('a.user_id=$1',[req.user!.id]))[0]});
 }));
 app.get('/api/seller/products',role('seller'),route(async(req,res)=>res.json({products:await products('p.seller_id=$1',[req.user!.id])})));
 app.post('/api/seller/products/batch',role('seller'),route(async(req,res)=>{
@@ -250,7 +276,8 @@ app.patch('/api/seller/order-items/:id',role('seller'),route(async(req,res)=>{
  const initial=await db.query('SELECT order_id FROM order_items WHERE id=$1 AND seller_id=$2',[itemId,req.user!.id]);if(!initial.rows[0])throw new HttpError(404,'Order item not found.');
  const orderId=initial.rows[0].order_id;const parent=await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[orderId]);const order=parent.rows[0];
  const {rows}=await db.query('SELECT * FROM order_items WHERE id=$1 AND seller_id=$2 FOR UPDATE',[itemId,req.user!.id]);const item=rows[0];
- if(order.payment_method==='paystack'&&order.payment_status!=='Paid')throw new HttpError(409,'Online payment must be confirmed before fulfillment.');
+ if(order.payment_status==='Needs Review')throw new HttpError(409,'Payment needs review before fulfillment or cash collection.');
+ if(order.payment_method==='flutterwave'&&order.payment_status!=='Paid')throw new HttpError(409,'Online payment must be confirmed before fulfillment.');
  if(item.status===status)return orderId;
  if(order.payment_method==='cod'&&status==='Delivered'&&paymentCollected!==true)throw new HttpError(400,'Confirm cash payment was collected before marking this pay-on-delivery item delivered.');
  const transitions:Record<string,string>={Confirmed:'Processed',Processed:'In Transit','In Transit':'Delivered'};
@@ -278,7 +305,7 @@ app.patch('/api/admin/applications/:id',role('admin'),route(async(req,res)=>{
  });res.json({application:(await applications('a.id=$1',[applicationId]))[0]});
 }));
 app.get('/api/admin/orders',role('admin'),route(async(_req,res)=>res.json({orders:await orders('true',[])})));
-app.get('/api/admin/payments',role('admin'),route(async(_req,res)=>{const {rows}=await pool.query('SELECT p.id,p.order_id "orderId",p.reference,p.amount_minor::float8 "amountMinor",p.status,p.last_error "lastError",p.created_at "createdAt",p.checked_at "checkedAt" FROM payments p ORDER BY p.created_at DESC LIMIT 200');res.json({payments:rows});}));
+app.get('/api/admin/payments',role('admin'),route(async(_req,res)=>{const {rows}=await pool.query('SELECT p.id,p.provider,p.order_id "orderId",p.reference,p.amount_minor::float8 "amountMinor",p.status,p.last_error "lastError",p.created_at "createdAt",p.checked_at "checkedAt" FROM payments p ORDER BY p.created_at DESC LIMIT 200');res.json({payments:rows});}));
 app.post('/api/admin/payments/:reference/verify',role('admin'),route(async(req,res)=>{const reference=required(100).parse(req.params.reference);const orderId=await verifyPayment(reference);if(!orderId)throw new HttpError(404,'Payment not found.');res.json({order:(await orders('o.id=$1',[orderId]))[0]});}));
 app.get('/api/admin/disputes',role('admin'),listTickets);
 app.patch('/api/admin/disputes/:id',role('admin'),changeTicket);

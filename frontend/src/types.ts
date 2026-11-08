@@ -1,5 +1,5 @@
 export type UserRole = 'buyer' | 'seller' | 'admin';
-export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; profileImage: string; dateOfBirth: string; gender: string; nationality: string; occupation: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean }
+export interface User { id: string; name: string; email: string; phone: string; city: string; state: string; bio: string; profileImage: string; dateOfBirth: string; gender: string; location: string; occupation: string; role: UserRole; accountType: 'buyer' | 'seller'; hasPassword: boolean; googleLinked: boolean; emailVerified: boolean }
 export const CATEGORIES = ['Snacks', 'Oils', 'Spices', 'Grains'] as const;
 export interface Product {
   id: string; sellerId: string; name: string; description: string; category: typeof CATEGORIES[number];
@@ -19,12 +19,13 @@ export interface OrderItem {
   unit: string; quantity: number; unitPriceMinor: number; totalMinor: number; status: OrderStatus; reviewed: boolean;
 }
 export interface Order {
-  id: string; createdAt: string; status: OrderStatus; paymentMethod: 'cod' | 'paystack'; paymentStatus: string;
+  cancellationTicketId?: string;
+  id: string; createdAt: string; status: OrderStatus; paymentMethod: 'cod' | 'flutterwave'; paymentProvider?: 'flutterwave' | 'legacy'; paymentStatus: string; deliveryPriority: 'normal' | 'urgent';
   subtotalMinor: number; deliveryFeeMinor: number; totalMinor: number; address: Address; items: OrderItem[];
   paymentReference?: string;
 }
 export interface VendorApplication {
-  id: string; businessName: string; legalEntityName: string; registrationNumber: string; legacyRegistrationNumber?: string; category: string;
+  id: string; businessName: string; legalEntityName: string; registrationNumber: string; legacyRegistrationNumber?: string; businessRegistrationNumber: string; images: string[]; category: string;
   location: string; phone?: string; description?: string; status: 'Pending' | 'Approved' | 'Rejected'; adminNotes?: string;
   contactPerson?: { name: string; email: string; phone: string }; createdAt?: string;
 }
@@ -39,4 +40,4 @@ export interface SupportTicket {
  events:{id:string;actorId:string|null;actorName:string;actorRole:string|null;action:string;note:string;createdAt:string}[];
 }
 export type Dispute = SupportTicket;
-export interface ShopConfig { googleClientId: string; currency: string; deliveryFeeMinor: number; payments: { cod: boolean; paystack: boolean } }
+export interface ShopConfig { googleClientId: string; currency: string; deliveryFeeMinor: number; urgentDeliveryFeeMinor: number; payments: { cod: boolean; flutterwave: boolean } }
