@@ -23,7 +23,7 @@ passwordRecoveryRouter.post('/auth/forgot-password',authLimit,route(async(req,re
   });
   if(issued){
     try{await mailer.sendPasswordReset(email,`${config.appUrl}/#auth/reset?token=${token}`);}
-    catch(error){await pool.query('UPDATE password_resets SET used_at=now() WHERE token_hash=$1',[tokenHash(token)]);console.error('Password reset email delivery failed:',(error as {code?:string}).code||'SMTP delivery error');}
+    catch(error){await pool.query('UPDATE password_resets SET used_at=now() WHERE token_hash=$1',[tokenHash(token)]);console.error('Password reset email delivery failed:',(error as {code?:string}).code||'SMTP delivery error');throw new HttpError(503,'The password-reset email could not be sent. Please try again later.');}
   }
   res.json({message:acknowledgement});
 }));

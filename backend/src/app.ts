@@ -1,6 +1,8 @@
 import express from 'express';
 import { cancelOrder } from './order-cancellation.js';
 import { passwordRecoveryRouter } from './password-recovery.js';
+import { emailVerificationRouter } from './email-verification.js';
+import { issueVerification } from './email-verification.js';
 import { imagesRouter, checkImageOwnership } from './images.js';
 import { productSchema, imageFields, createProducts } from './product-write.js';
 import { businessSchema, submitStoreApplication } from './vendors.js';
@@ -50,16 +52,18 @@ app.get('/api/config',(_req,res)=>res.json({currency:'NGN',deliveryFeeMinor:0,pa
 app.use('/api',sessionMiddleware);
 app.use('/api',imagesRouter);
 app.use('/api',passwordRecoveryRouter);
+app.use('/api',emailVerificationRouter);
 app.get('/api/auth/me',(req,res)=>res.json({user:req.user||null}));
 app.post('/api/auth/register',authLimit,route(async(req,res)=>{
  const body=z.object({name:required(120),email:emailSchema,password:passwordSchema,accountType:z.enum(['buyer','seller']).default('buyer'),business:businessSchema.optional()}).strict().parse(req.body);
  if(body.accountType==='seller'&&!body.business)throw new HttpError(400,'Complete your business information to register as a vendor.');
  if(body.accountType==='buyer'&&body.business)throw new HttpError(400,'Buyer registration does not require business information. Apply for a store from your profile later.');
+ if(!config.smtpHost||!config.smtpUser||!config.smtpPassword||!config.emailFrom)throw new HttpError(503,'Email verification is temporarily unavailable. Please try again later.');
  const user=await transaction(async db=>{
-  const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type) VALUES($1,$2,$3,$4,$5) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
+  const {rows}=await db.query('INSERT INTO users(id,email,name,password_hash,account_type,email_verified_at) VALUES($1,$2,$3,$4,$5,NULL) RETURNING *',[randomUUID(),body.email,body.name,await hashPassword(body.password),body.accountType]);
   if(body.business)await submitStoreApplication(db,rows[0].id,body.business);
   await createSession(rows[0].id,res,db);return userJSON(rows[0]);
- });res.status(201).json({user});
+ });await issueVerification(user.id,user.email);res.status(201).json({user,verificationRequired:true});
 }));
 app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  const body=z.object({email:emailSchema,password:z.string().max(128)}).strict().parse(req.body);
@@ -67,6 +71,7 @@ app.post('/api/auth/login',authLimit,route(async(req,res)=>{
  const row=rows[0];
  if(!row || !row.password_hash){await hashPassword(body.password);throw new HttpError(401,'Email or password is incorrect.');}
  if(!await verifyPassword(body.password,row.password_hash))throw new HttpError(401,'Email or password is incorrect.');
+ if(!row.email_verified_at)throw new HttpError(403,'Please verify your email address before signing in. Check your inbox or request a new verification link.');
  const oldToken=cookieToken(req);if(oldToken)await pool.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);
  if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
  await createSession(row.id,res);res.json({user:userJSON(row)});
@@ -81,7 +86,7 @@ app.post('/api/auth/google',authLimit,route(async(req,res)=>{
   if(!row){
    const existing=await db.query('SELECT id FROM users WHERE email=$1',[identity.email]);
    if(existing.rowCount)throw new HttpError(409,'An account already uses this email. Sign in with your password, then connect Google from Account.');
-   const created=await db.query('INSERT INTO users(id,email,name,password_hash,google_subject,account_type) VALUES($1,$2,$3,NULL,$4,$5) RETURNING *',[randomUUID(),identity.email,identity.name,identity.sub,body.accountType]);row=created.rows[0];
+   const created=await db.query('INSERT INTO users(id,email,name,password_hash,google_subject,account_type,email_verified_at) VALUES($1,$2,$3,NULL,$4,$5,now()) RETURNING *',[randomUUID(),identity.email,identity.name,identity.sub,body.accountType]);row=created.rows[0];
   }
   if(row.status!=='active')throw new HttpError(403,'This account is '+row.status+'. Contact support for help.');
   const oldToken=cookieToken(req);if(oldToken)await db.query('DELETE FROM sessions WHERE token_hash=$1',[tokenHash(oldToken)]);

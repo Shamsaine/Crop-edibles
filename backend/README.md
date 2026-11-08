@@ -77,6 +77,15 @@ Flutterwave keys are `PUBLIC_KEY`, `SECRET_KEY`, `ENCRYPTION_KEY`. Hosted checko
 
 `POST /auth/forgot-password` accepts `{email}` and sends a single-use reset link through SMTP. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` and `EMAIL_FROM`. Reset links use `APP_URL/#auth/reset?token=...`, expire in 30 minutes and are stored as hashes. `POST /auth/reset-password` accepts `{token,password,confirmPassword}`, validates a matching password of 10–128 characters, replaces the salted password hash and revokes every session. Suspended, Google-only or unknown accounts cannot use this flow; eligible and ineligible requests receive the same acknowledgement. Resends invalidate earlier links and are limited to one per minute/five per hour per account, with the existing IP limiter as well. Normal password changes also invalidate reset links.
 
+Normal email/password registration sends a single-use verification link to
+`APP_URL/#auth/verify?token=...`. Verification links expire after 24 hours and
+are stored as SHA-256 hashes. Password sign-in is blocked until the address is
+verified; Google registrations are treated as verified because Google identity
+verification requires a verified email. `POST /auth/resend-verification` sends
+another link with the same one-minute/five-per-hour account limits, and
+`POST /auth/verify-email` consumes a link. Existing accounts are marked verified
+by the migration so deployment does not lock out established users.
+
 ## API
 
 All routes are under `/api`, use JSON, and return `{error: string, details?: [...]}` on failure. Authentication uses the HttpOnly `edible_session` cookie, SameSite=Lax and Secure in production. Browser write requests must originate from `APP_URL`. Never store a password, role authority or session token in browser storage.
@@ -117,7 +126,7 @@ Address fields: `label`, `recipientName`, `phone`, `line1`, `line2`, `city`, `st
 
 `npm test` creates a uniquely named `edible_test_<uuid>` PostgreSQL schema, applies migrations, runs HTTP integration tests on an ephemeral port and drops only that schema. It asserts the isolated search path before exercising account/session/RBAC checks, seller approval/ownership, baskets/addresses, idempotent multi-seller checkout, concurrent stock contention, explicit COD collection, reviews/support access, cancellation, signed Flutterwave events, replay handling, incorrect payment amounts/currencies, late success, provider outages and password-session invalidation. It never seeds or truncates production tables. The database role needs CREATE SCHEMA permission for tests.
 
-Production hardening still needs deployment-specific shared rate limiting, alerting, backups, email verification/password recovery, seller-document verification/storage and payment/refund operational procedures. The included authentication limiter is per process and does not replace an edge/shared limiter across multiple API instances.
+Production hardening still needs deployment-specific shared rate limiting, alerting, backups, seller-document verification/storage and payment/refund operational procedures. The included authentication limiter is per process and does not replace an edge/shared limiter across multiple API instances.
 
 Product PATCH only changes supplied fields. Clients may send expectedStock with stock for an atomic stale-inventory check (409 on a mismatch). The seller form omits unchanged stock when editing other details, so a price or description edit cannot undo concurrent sales.
 

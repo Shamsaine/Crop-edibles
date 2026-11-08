@@ -15,7 +15,7 @@ async function main() {
     const password=passwordSchema.parse(process.env.ADMIN_PASSWORD || await prompt.question('Admin password (visible; 10+ characters): '));
     const exists=await pool.query('SELECT 1 FROM users WHERE email=$1',[email]);
     if(exists.rowCount) throw new Error('An account already exists with that email. This command does not promote or overwrite existing accounts.');
-    await pool.query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,\'admin\')',[randomUUID(),email,name,await hashPassword(password)]);
+    await pool.query('INSERT INTO users(id,email,name,password_hash,role,email_verified_at) VALUES($1,$2,$3,$4,\'admin\',now())',[randomUUID(),email,name,await hashPassword(password)]);
     console.log(`Administrator created: ${email}`);
   } finally { prompt.close(); }
 }

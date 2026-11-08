@@ -10,7 +10,9 @@ process.env.DB_SCHEMA=schema;
 const { pool,config }=await import('../src/db.js');
 const { migrate }=await import('../src/migrate.js');
 const { hashPassword }=await import('../src/auth.js');
+const { mailer }=await import('../src/mail.js');
 const { app }=await import('../src/app.js');
+mailer.sendEmailVerification=async()=>{};
 let server:Server;
 let base='';
 const password='A-good-test-password-42';
@@ -32,7 +34,7 @@ test('database-backed marketplace and payment lifecycle',{timeout:120000},async 
   const response=await realFetch(base+path,{method,headers:{'Content-Type':'application/json',Origin:config.appUrl,...(account?{Cookie:account.cookie}:{}),...extra},...(body!==undefined?{body:JSON.stringify(body)}:{})});
   const json=await response.json() as any;return {status:response.status,body:json,cookie:response.headers.get('set-cookie')?.split(';')[0]||'',headers:response.headers};
  };
- const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));accounts[key]={id:result.body.user.id,email,cookie:result.cookie};assert.match(result.headers.get('set-cookie')||'',/HttpOnly/);assert.match(result.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
+ const register=async(key:string)=>{const email=`${key}@example.test`;const result=await request('POST','/auth/register',{name:key,email,password});assert.equal(result.status,201,JSON.stringify(result.body));await pool.query('UPDATE users SET email_verified_at=now() WHERE email=$1',[email]);accounts[key]={id:result.body.user.id,email,cookie:result.cookie};assert.match(result.headers.get('set-cookie')||'',/HttpOnly/);assert.match(result.headers.get('set-cookie')||'',/SameSite=Lax/);return accounts[key];};
  let product1:any,product2:any,address1:any,address2:any,order:any;
  try{
  await t.test('auth registration, sessions, origin protection and roles',async()=>{

@@ -101,6 +101,15 @@ Reset links expire after 30 minutes, work once and invalidate all existing sessi
 Unknown emails, Google-only accounts and throttled requests receive the same
 acknowledgement. No reset tokens are exposed in API responses or logs.
 
+## Email verification
+
+New email/password accounts receive a single-use verification link by email.
+The link expires after 24 hours and must be opened before password sign-in is
+allowed. Use the verification page to confirm the address, or use its resend
+action when needed. Google accounts are considered verified by the server after
+Google's verified-email identity check. Existing accounts are preserved as
+verified when the verification migration is applied.
+
 ## Development and validation
 
 - `npm run lint`: TypeScript checks for both workspaces.

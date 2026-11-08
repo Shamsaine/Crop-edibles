@@ -66,7 +66,7 @@ adminRouter.post('/admins',route(async(req,res)=>{
  const body=z.object({name:required(120),email:emailSchema,password:passwordSchema}).strict().parse(req.body);
  const passwordHash=await hashPassword(body.password);
  const account=await adminTransaction(req.user!.id,async db=>{
-  const {rows}=await db.query("INSERT INTO users(id,name,email,password_hash,role) VALUES($1,$2,$3,$4,'admin') RETURNING id,name,email,role,status,created_at",[randomUUID(),body.name,body.email,passwordHash]);
+  const {rows}=await db.query("INSERT INTO users(id,name,email,password_hash,role,email_verified_at) VALUES($1,$2,$3,$4,'admin',now()) RETURNING id,name,email,role,status,created_at",[randomUUID(),body.name,body.email,passwordHash]);
   await audit(db,req.user!.id,'account',rows[0].id,'admin_created','Administrator account created.');return rows[0];
  });res.status(201).json({account});
 }));

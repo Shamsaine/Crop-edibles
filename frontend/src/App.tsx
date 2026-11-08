@@ -5,6 +5,7 @@ import { api, mutate, useAction, useResource } from './api';
 import type { Cart as CartData, Order, Product, User } from './types';
 import AuthScreen, { AuthLayout } from './components/AuthScreen';
 import PasswordRecovery from './components/PasswordRecovery';
+import EmailVerification, { EmailVerificationBanner } from './components/EmailVerification';
 import SiteFooter from './components/SiteFooter';
 import { siteContent } from './siteContent';
 import { ProductDetail, ProductGrid } from './components/Catalog';
@@ -114,6 +115,7 @@ export default function App() {
     {sessionLoading ? <AuthLayout><div className="auth-panel"><Loading /></div></AuthLayout>
       : sessionError && !user ? <AuthLayout><div className="auth-panel"><Feedback error={sessionError} />{connectionError}</div></AuthLayout>
       : page.startsWith('auth/reset') ? <AuthLayout><PasswordRecovery token={new URLSearchParams(page.split('?')[1]||'').get('token')||''} onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
+      : page.startsWith('auth/verify') ? <AuthLayout><EmailVerification token={new URLSearchParams(page.split('?')[1]||'').get('token')||''} onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : page === 'auth/forgot' ? <AuthLayout><PasswordRecovery onBack={()=>{window.location.hash='auth';refresh();}}/></AuthLayout>
       : <AuthScreen onSuccess={onAuthSuccess} notice={paymentReference ? 'Sign in to the account you used at checkout to verify your payment.' : undefined} />}
   </main>;
@@ -140,6 +142,7 @@ export default function App() {
       {routeRoot!=="admin"&&<div className="refresh-row"><button className="text-button" onClick={refresh} aria-label="Refresh account and marketplace"><RefreshCw size={14} />Refresh</button></div>}
       <Feedback error={sessionError || action.error || cart.error || wishlist.error} success={action.success} />
       {sessionLoading ? <Loading /> : sessionError && !user ? connectionError : <>
+        {user && !user.emailVerified && <EmailVerificationBanner email={user.email} />}
         {paymentReference && (user ? <PaymentReturn reference={paymentReference} onChange={refresh} onDone={finishPayment} /> : <p className="notice">Sign in to the account you used at checkout to verify your payment.</p>)}
         {page.startsWith('product/') ? <ProductDetail key={page} id={page.slice('product/'.length)} revision={revision} {...shopping} />
           : (page === 'pantry' || page.startsWith('pantry?')) ? <Pantry query={page.includes('?') ? page.slice(page.indexOf('?') + 1) : ''} revision={revision} {...shopping} />
